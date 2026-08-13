@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { SKILL_LIMITS, type OutlineNode } from '../../shared/contracts'
+import { DEFAULT_ARXIV_MCP_SERVER_ID } from '../../shared/defaultMcp'
 
 const httpUrl = z.string().url().refine((value) => {
   const protocol = new URL(value).protocol
@@ -80,7 +81,8 @@ const httpTransportSchema = z.object({
 })
 
 export const mcpServerInputSchema = z.object({
-  id: z.string().uuid().optional(),
+  // 用户添加的 MCP 使用 UUID；内置 arXiv MCP 使用稳定 ID，便于旧工作区升级与默认来源引用。
+  id: z.union([z.string().uuid(), z.literal(DEFAULT_ARXIV_MCP_SERVER_ID)]).optional(),
   name: z.string().trim().min(1).max(100),
   transport: z.discriminatedUnion('type', [stdioTransportSchema, httpTransportSchema]),
   enabled: z.boolean(),
