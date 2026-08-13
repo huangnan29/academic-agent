@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
 import type {
   AgentRun,
   LiteratureRecord,
@@ -20,6 +20,7 @@ import { ExportCoordinator } from './exportCoordinator'
 import { PaperCoordinator } from './paperCoordinator'
 import {
   chatStartSchema,
+  conversationUpdateSchema,
   literatureSearchSchema,
   mcpServerInputSchema,
   outlineGenerateSchema,
@@ -168,6 +169,26 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
       return repository.setActiveConversation(projectId, conversationId)
     },
   )
+
+  handle(IPC.conversationUpdate, async (_event, payload: unknown) => {
+    return repository.updateConversation(conversationUpdateSchema.parse(payload))
+  })
+
+  handle(
+    IPC.conversationMove,
+    async (_event, conversationId: unknown, targetProjectId: unknown) => {
+      assertId(conversationId, '对话')
+      assertId(targetProjectId, '目标研究')
+      return repository.moveConversation(conversationId, targetProjectId)
+    },
+  )
+
+  handle(IPC.conversationCopyId, async (_event, conversationId: unknown) => {
+    assertId(conversationId, '对话')
+    const conversation = repository.snapshot().conversations.find((item) => item.id === conversationId)
+    if (!conversation) throw new Error('对话不存在或已经被移除。')
+    clipboard.writeText(conversation.id)
+  })
 
   handle(IPC.providerSave, async (_event, payload) => {
     const input = providerInputSchema.parse(payload)

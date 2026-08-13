@@ -2,6 +2,7 @@ import type {
   Artifact,
   ChatStartInput,
   ChatStreamEvent,
+  ConversationUpdateInput,
   ExportFormat,
   LiteratureRecord,
   LiteratureSearchInput,
@@ -40,6 +41,9 @@ declare global {
       conversation: {
         create(projectId: string): Promise<WorkspaceState>
         setActive(projectId: string, conversationId: string): Promise<WorkspaceState>
+        update(input: ConversationUpdateInput): Promise<WorkspaceState>
+        move(conversationId: string, targetProjectId: string): Promise<WorkspaceState>
+        copyId(conversationId: string): Promise<void>
       }
       provider: {
         save(input: ProviderInput): Promise<ProviderProfile>

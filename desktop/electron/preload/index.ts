@@ -3,6 +3,7 @@ import { IPC } from '../../shared/ipc'
 import type {
   ChatStartInput,
   ChatStreamEvent,
+  ConversationUpdateInput,
   ExportFormat,
   LiteratureSearchInput,
   McpServerInput,
@@ -36,6 +37,12 @@ const api = {
     create: (projectId: string) => ipcRenderer.invoke(IPC.conversationCreate, projectId),
     setActive: (projectId: string, conversationId: string) =>
       ipcRenderer.invoke(IPC.conversationSetActive, projectId, conversationId),
+    update: (input: ConversationUpdateInput) =>
+      ipcRenderer.invoke(IPC.conversationUpdate, input),
+    move: (conversationId: string, targetProjectId: string) =>
+      ipcRenderer.invoke(IPC.conversationMove, conversationId, targetProjectId),
+    copyId: (conversationId: string) =>
+      ipcRenderer.invoke(IPC.conversationCopyId, conversationId),
   },
   provider: {
     save: (input: ProviderInput) => ipcRenderer.invoke(IPC.providerSave, input),

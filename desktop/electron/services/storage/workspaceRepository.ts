@@ -7,6 +7,7 @@ import type {
   ChatMessage,
   CitationEvidence,
   Conversation,
+  ConversationUpdateInput,
   LiteratureRecord,
   McpServerConfig,
   ManuscriptSection,
@@ -223,6 +224,9 @@ function normalizeState(candidate: Partial<WorkspaceState>): WorkspaceState {
     })),
     conversations: (candidate.conversations ?? base.conversations).map((conversation, index) => ({
       ...conversation,
+      pinned: conversation.pinned === true,
+      archived: conversation.archived === true,
+      unread: conversation.unread === true,
       manualOrder: typeof conversation.manualOrder === 'number' ? conversation.manualOrder : index,
     })),
     messages: candidate.messages ?? base.messages,
@@ -251,6 +255,11 @@ function normalizeState(candidate: Partial<WorkspaceState>): WorkspaceState {
     normalized.settings.demoMode = activeProject.origin === 'demo'
   }
   normalized.settings.sidebarViewMode = normalized.settings.sidebarViewMode === 'list' ? 'list' : 'projects'
+  normalized.settings.sidebarShowArchived = normalized.settings.sidebarShowArchived === true
+  normalized.settings.sidebarWidth =
+    typeof normalized.settings.sidebarWidth === 'number'
+      ? Math.max(240, Math.min(520, Math.round(normalized.settings.sidebarWidth)))
+      : undefined
   normalized.settings.sidebarChatSort = ['priority', 'recent', 'manual'].includes(
     normalized.settings.sidebarChatSort ?? '',
   )
@@ -428,8 +437,144 @@ export class WorkspaceRepository {
       )
       if (!project || !conversation) throw new Error('对话不存在或不属于该项目。')
       project.activeConversationId = conversation.id
+      conversation.unread = false
       state.settings.activeProjectId = project.id
       state.settings.demoMode = project.origin === 'demo'
+      synchronizeActiveModelSelection(state)
+      return state
+    })
+  }
+
+  async updateConversation(input: ConversationUpdateInput): Promise<WorkspaceState> {
+    return this.mutate((state) => {
+      const conversation = state.conversations.find((item) => item.id === input.conversationId)
+      if (!conversation) throw new Error('对话不存在或已经被移除。')
+      const project = state.projects.find((item) => item.id === conversation.projectId)
+      if (!project) throw new Error('对话所属研究不存在。')
+
+      if (input.archived === true) {
+        const conversationRunIds = new Set(
+          state.messages
+            .filter((message) => message.conversationId === conversation.id)
+            .map((message) => message.runId)
+            .filter((runId): runId is string => Boolean(runId)),
+        )
+        if (state.runs.some((run) => conversationRunIds.has(run.id) && ['queued', 'running'].includes(run.status))) {
+          throw new Error('该对话仍在生成内容，请先停止后再归档。')
+        }
+      }
+
+      if (input.title !== undefined) conversation.title = input.title.trim()
+      if (input.pinned !== undefined) conversation.pinned = input.pinned
+      if (input.unread !== undefined) conversation.unread = input.unread
+      if (input.archived !== undefined) {
+        conversation.archived = input.archived
+        if (input.archived && project.activeConversationId === conversation.id) {
+          const fallback = state.conversations.find(
+            (item) => item.projectId === project.id && item.id !== conversation.id && !item.archived,
+          )
+          if (fallback) {
+            project.activeConversationId = fallback.id
+          } else {
+            const timestamp = now()
+            const replacement: Conversation = {
+              id: randomUUID(),
+              projectId: project.id,
+              title: '新对话',
+              messageIds: [],
+              pinned: false,
+              archived: false,
+              unread: false,
+              manualOrder: Math.min(0, ...state.conversations
+                .filter((item) => item.projectId === project.id)
+                .map((item) => item.manualOrder ?? 0)) - 1,
+              origin: project.origin,
+              verificationStatus: project.verificationStatus,
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            }
+            state.conversations.unshift(replacement)
+            project.activeConversationId = replacement.id
+          }
+        }
+      }
+      return state
+    })
+  }
+
+  async moveConversation(conversationId: string, targetProjectId: string): Promise<WorkspaceState> {
+    return this.mutate((state) => {
+      const conversation = state.conversations.find((item) => item.id === conversationId)
+      const targetProject = state.projects.find((item) => item.id === targetProjectId)
+      if (!conversation || !targetProject) throw new Error('对话或目标研究不存在。')
+      const sourceProject = state.projects.find((item) => item.id === conversation.projectId)
+      if (!sourceProject) throw new Error('对话所属研究不存在。')
+      if (sourceProject.id === targetProject.id) return state
+      if (sourceProject.origin !== targetProject.origin) {
+        throw new Error('演示研究与真实研究之间不能移动对话。')
+      }
+      const conversationRunIds = new Set(
+        state.messages
+          .filter((message) => message.conversationId === conversation.id)
+          .map((message) => message.runId)
+          .filter((runId): runId is string => Boolean(runId)),
+      )
+      if (state.runs.some((run) => conversationRunIds.has(run.id) && ['queued', 'running'].includes(run.status))) {
+        throw new Error('该对话仍在生成内容，请先停止后再移动。')
+      }
+
+      const timestamp = now()
+      if (sourceProject.activeConversationId === conversation.id) {
+        const fallback = state.conversations.find(
+          (item) => item.projectId === sourceProject.id && item.id !== conversation.id && !item.archived,
+        )
+        if (fallback) {
+          sourceProject.activeConversationId = fallback.id
+        } else {
+          const replacement: Conversation = {
+            id: randomUUID(),
+            projectId: sourceProject.id,
+            title: '新对话',
+            messageIds: [],
+            pinned: false,
+            archived: false,
+            unread: false,
+            manualOrder: 0,
+            origin: sourceProject.origin,
+            verificationStatus: sourceProject.verificationStatus,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          }
+          state.conversations.unshift(replacement)
+          sourceProject.activeConversationId = replacement.id
+        }
+      }
+
+      const targetConversations = state.conversations.filter((item) => item.projectId === targetProject.id)
+      conversation.projectId = targetProject.id
+      conversation.archived = false
+      conversation.manualOrder = Math.min(0, ...targetConversations.map((item) => item.manualOrder ?? 0)) - 1
+      const movedRunIds = new Set(
+        state.messages
+          .filter((message) => message.conversationId === conversation.id)
+          .map((message) => message.runId)
+          .filter((runId): runId is string => Boolean(runId)),
+      )
+      state.messages.forEach((message) => {
+        if (message.conversationId === conversation.id) message.projectId = targetProject.id
+      })
+      state.runs.forEach((run) => {
+        if (movedRunIds.has(run.id)) run.projectId = targetProject.id
+      })
+      sourceProject.updatedAt = timestamp
+      targetProject.updatedAt = timestamp
+      targetProject.activeConversationId = conversation.id
+      state.settings.activeProjectId = targetProject.id
+      state.settings.demoMode = targetProject.origin === 'demo'
+      state.settings.sidebarExpandedProjectIds = [
+        targetProject.id,
+        ...(state.settings.sidebarExpandedProjectIds ?? []).filter((id) => id !== targetProject.id),
+      ]
       synchronizeActiveModelSelection(state)
       return state
     })
@@ -443,6 +588,8 @@ export class WorkspaceRepository {
         const known = new Set(state.projects.map((project) => project.id))
         state.settings.sidebarExpandedProjectIds = [...new Set(input.expandedProjectIds)].filter((id) => known.has(id))
       }
+      if (input.showArchived !== undefined) state.settings.sidebarShowArchived = input.showArchived
+      if (input.sidebarWidth !== undefined) state.settings.sidebarWidth = input.sidebarWidth
       if (input.projectOrder) {
         const order = new Map(input.projectOrder.map((id, index) => [id, index]))
         state.projects.forEach((project, index) => {

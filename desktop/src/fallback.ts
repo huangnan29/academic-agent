@@ -715,12 +715,19 @@ function readState(): WorkspaceState {
       })),
       conversations: (parsed.conversations ?? []).map((conversation, index) => ({
         ...conversation,
+        pinned: conversation.pinned === true,
+        archived: conversation.archived === true,
+        unread: conversation.unread === true,
         manualOrder: typeof conversation.manualOrder === 'number' ? conversation.manualOrder : index,
       })),
       skills: Array.isArray(parsed.skills) ? parsed.skills : [],
       settings: {
         ...parsed.settings,
         sidebarViewMode: parsed.settings?.sidebarViewMode === 'list' ? 'list' : 'projects',
+        sidebarShowArchived: parsed.settings?.sidebarShowArchived === true,
+        sidebarWidth: typeof parsed.settings?.sidebarWidth === 'number'
+          ? Math.max(240, Math.min(520, Math.round(parsed.settings.sidebarWidth)))
+          : undefined,
         sidebarChatSort: ['priority', 'recent', 'manual'].includes(
           parsed.settings?.sidebarChatSort ?? '',
         )
@@ -787,6 +794,8 @@ const fallbackApi: PaperAgentApi = {
           const known = new Set(draft.projects.map((project) => project.id))
           draft.settings.sidebarExpandedProjectIds = [...new Set(input.expandedProjectIds)].filter((id) => known.has(id))
         }
+        if (input.showArchived !== undefined) draft.settings.sidebarShowArchived = input.showArchived
+        if (input.sidebarWidth !== undefined) draft.settings.sidebarWidth = input.sidebarWidth
         if (input.projectOrder) {
           const order = new Map(input.projectOrder.map((id, index) => [id, index]))
           draft.projects.forEach((project, index) => {
@@ -956,9 +965,112 @@ const fallbackApi: PaperAgentApi = {
         )
         if (!project || !conversation) throw new Error('对话不存在或不属于该项目')
         project.activeConversationId = conversation.id
+        conversation.unread = false
         draft.settings.activeProjectId = project.id
       })
       return clone(next)
+    },
+    async update(input) {
+      const next = mutate((draft) => {
+        const conversation = draft.conversations.find((item) => item.id === input.conversationId)
+        if (!conversation) throw new Error('对话不存在或已经被移除')
+        const project = draft.projects.find((item) => item.id === conversation.projectId)
+        if (!project) throw new Error('对话所属研究不存在')
+        if (input.archived === true) {
+          const runIds = new Set(
+            draft.messages
+              .filter((message) => message.conversationId === conversation.id)
+              .map((message) => message.runId)
+              .filter((runId): runId is string => Boolean(runId)),
+          )
+          if (draft.runs.some((run) => runIds.has(run.id) && ['queued', 'running'].includes(run.status))) {
+            throw new Error('该对话仍在生成内容，请先停止后再归档')
+          }
+        }
+        if (input.title !== undefined) conversation.title = input.title.trim()
+        if (input.pinned !== undefined) conversation.pinned = input.pinned
+        if (input.unread !== undefined) conversation.unread = input.unread
+        if (input.archived !== undefined) {
+          conversation.archived = input.archived
+          if (input.archived && project.activeConversationId === conversation.id) {
+            let fallback = draft.conversations.find(
+              (item) => item.projectId === project.id && item.id !== conversation.id && !item.archived,
+            )
+            if (!fallback) {
+              const timestamp = now()
+              fallback = {
+                id: makeId('conversation'),
+                projectId: project.id,
+                title: '新对话',
+                messageIds: [],
+                pinned: false,
+                archived: false,
+                unread: false,
+                manualOrder: 0,
+                origin: project.origin,
+                verificationStatus: project.verificationStatus,
+                createdAt: timestamp,
+                updatedAt: timestamp,
+              }
+              draft.conversations.unshift(fallback)
+            }
+            project.activeConversationId = fallback.id
+          }
+        }
+      })
+      return clone(next)
+    },
+    async move(conversationId, targetProjectId) {
+      const next = mutate((draft) => {
+        const conversation = draft.conversations.find((item) => item.id === conversationId)
+        const targetProject = draft.projects.find((item) => item.id === targetProjectId)
+        if (!conversation || !targetProject) throw new Error('对话或目标研究不存在')
+        const sourceProject = draft.projects.find((item) => item.id === conversation.projectId)
+        if (!sourceProject) throw new Error('对话所属研究不存在')
+        if (sourceProject.id === targetProject.id) return
+        if (sourceProject.origin !== targetProject.origin) throw new Error('演示研究与真实研究之间不能移动对话')
+        if (sourceProject.activeConversationId === conversation.id) {
+          let fallback = draft.conversations.find(
+            (item) => item.projectId === sourceProject.id && item.id !== conversation.id && !item.archived,
+          )
+          if (!fallback) {
+            const timestamp = now()
+            fallback = {
+              id: makeId('conversation'),
+              projectId: sourceProject.id,
+              title: '新对话',
+              messageIds: [],
+              pinned: false,
+              archived: false,
+              unread: false,
+              manualOrder: 0,
+              origin: sourceProject.origin,
+              verificationStatus: sourceProject.verificationStatus,
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            }
+            draft.conversations.unshift(fallback)
+          }
+          sourceProject.activeConversationId = fallback.id
+        }
+        conversation.projectId = targetProject.id
+        conversation.archived = false
+        draft.messages.forEach((message) => {
+          if (message.conversationId === conversation.id) message.projectId = targetProject.id
+        })
+        targetProject.activeConversationId = conversation.id
+        draft.settings.activeProjectId = targetProject.id
+        draft.settings.sidebarExpandedProjectIds = [
+          targetProject.id,
+          ...(draft.settings.sidebarExpandedProjectIds ?? []).filter((id) => id !== targetProject.id),
+        ]
+      })
+      return clone(next)
+    },
+    async copyId(conversationId) {
+      const conversation = readState().conversations.find((item) => item.id === conversationId)
+      if (!conversation) throw new Error('对话不存在或已经被移除')
+      await navigator.clipboard.writeText(conversation.id)
     },
   },
   provider: {

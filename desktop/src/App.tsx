@@ -1,5 +1,7 @@
 import {
   Activity,
+  Archive,
+  ArchiveRestore,
   BookOpen,
   Bot,
   Check,
@@ -9,6 +11,7 @@ import {
   CircleCheck,
   CircleDot,
   Clock3,
+  Copy,
   Database,
   Download,
   ExternalLink,
@@ -16,6 +19,7 @@ import {
   FileText,
   Files,
   Folder,
+  FolderInput,
   FolderOpen,
   GripVertical,
   KeyRound,
@@ -26,6 +30,8 @@ import {
   LoaderCircle,
   MessageSquareText,
   MessageSquarePlus,
+  Mail,
+  MailOpen,
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
@@ -50,12 +56,22 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
+import {
+  FormEvent,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useRef,
+  useState,
+} from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type {
   AgentStep,
   ChatMessage,
+  Conversation,
+  ConversationUpdateInput,
   LiteratureRecord,
   McpServerConfig,
   ManuscriptSection,
@@ -227,6 +243,17 @@ function moveIdBefore(ids: string[], draggedId: string, targetId: string): strin
   return next
 }
 
+interface ConversationMenuState {
+  projectId: string
+  conversationId: string
+  x: number
+  y: number
+}
+
+const DEFAULT_SIDEBAR_WIDTH = 280
+const MIN_SIDEBAR_WIDTH = 240
+const MAX_SIDEBAR_WIDTH = 520
+
 function Sidebar({
   workspace,
   activeProjectId,
@@ -237,12 +264,18 @@ function Sidebar({
   onProject,
   onConversation,
   onCreateConversation,
+  onUpdateConversation,
+  onMoveConversation,
+  onCopyConversationId,
   onPinProject,
   onSetPreferences,
   onCreate,
   onChooseFolder,
   onDeleteProject,
   onRevealProject,
+  sidebarWidth,
+  onSidebarWidthChange,
+  onSidebarWidthCommit,
   choosingFolder,
 }: {
   workspace: WorkspaceState
@@ -254,23 +287,38 @@ function Sidebar({
   onProject: (projectId: string) => void
   onConversation: (projectId: string, conversationId: string) => void
   onCreateConversation: (projectId: string) => void
+  onUpdateConversation: (input: ConversationUpdateInput) => Promise<void>
+  onMoveConversation: (conversationId: string, targetProjectId: string) => Promise<void>
+  onCopyConversationId: (conversationId: string) => Promise<void>
   onPinProject: (projectId: string, pinned: boolean) => void
   onSetPreferences: (input: SidebarPreferencesInput) => void
   onCreate: () => void
   onChooseFolder: () => void
   onDeleteProject: (projectId: string) => void
   onRevealProject: (projectId: string) => void
+  sidebarWidth: number
+  onSidebarWidthChange: (width: number) => void
+  onSidebarWidthCommit: (width: number) => void
   choosingFolder: boolean
 }) {
   const [openProjectMenuId, setOpenProjectMenuId] = useState<string>()
   const [organizeMenuOpen, setOrganizeMenuOpen] = useState(false)
   const [dragged, setDragged] = useState<{ kind: 'project' | 'conversation'; id: string }>()
+  const [conversationMenu, setConversationMenu] = useState<ConversationMenuState>()
+  const [moveMenuOpen, setMoveMenuOpen] = useState(false)
+  const [renameTarget, setRenameTarget] = useState<Conversation>()
+  const [renameDraft, setRenameDraft] = useState('')
+  const [renaming, setRenaming] = useState(false)
   const projectMenuRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const projectMenuTriggerRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const organizeMenuRef = useRef<HTMLDivElement | null>(null)
   const organizeTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const conversationMenuRef = useRef<HTMLDivElement | null>(null)
+  const resizeStateRef = useRef<{ pointerId: number; startX: number; startWidth: number } | undefined>(undefined)
+  const latestSidebarWidthRef = useRef(sidebarWidth)
   const viewMode = workspace.settings.sidebarViewMode ?? 'projects'
   const chatSort = workspace.settings.sidebarChatSort ?? 'priority'
+  const showArchived = workspace.settings.sidebarShowArchived === true
   const expandedIds = new Set(workspace.settings.sidebarExpandedProjectIds ?? [])
   const projectById = new Map(workspace.projects.map((project) => [project.id, project]))
   const activityAt = (projectId: string) => {
@@ -285,11 +333,13 @@ function Sidebar({
     if (chatSort === 'priority' && Boolean(left.pinned) !== Boolean(right.pinned)) return left.pinned ? -1 : 1
     return activityAt(right.id).localeCompare(activityAt(left.id))
   })
-  const sortConversations = (items: WorkspaceState['conversations']) => [...items].sort((left, right) => {
+  const sortConversations = (items: WorkspaceState['conversations']) => [...items]
+    .filter((item) => showArchived || !item.archived)
+    .sort((left, right) => {
     if (chatSort === 'manual') return (left.manualOrder ?? 0) - (right.manualOrder ?? 0)
     if (chatSort === 'priority') {
-      const leftPinned = Boolean(projectById.get(left.projectId)?.pinned)
-      const rightPinned = Boolean(projectById.get(right.projectId)?.pinned)
+      const leftPinned = Boolean(left.pinned || projectById.get(left.projectId)?.pinned)
+      const rightPinned = Boolean(right.pinned || projectById.get(right.projectId)?.pinned)
       if (leftPinned !== rightPinned) return leftPinned ? -1 : 1
     }
     return right.updatedAt.localeCompare(left.updatedAt)
@@ -298,6 +348,10 @@ function Sidebar({
   const researchFolderLabel = workspace.settings.researchRootPath
     ? `设置默认研究文件夹。当前目录：${workspace.settings.researchRootPath}`
     : '设置默认研究文件夹。未设置时使用“文稿/学术 Agent”'
+
+  useEffect(() => {
+    latestSidebarWidthRef.current = sidebarWidth
+  }, [sidebarWidth])
 
   useEffect(() => {
     if (!openProjectMenuId) return
@@ -321,6 +375,104 @@ function Sidebar({
     document.addEventListener('keydown', closeMenu)
     return () => document.removeEventListener('keydown', closeMenu)
   }, [openProjectMenuId, organizeMenuOpen])
+
+  useEffect(() => {
+    if (!conversationMenu) return
+    const close = (event: MouseEvent) => {
+      if (!conversationMenuRef.current?.contains(event.target as Node)) {
+        setConversationMenu(undefined)
+        setMoveMenuOpen(false)
+      }
+    }
+    const closeWithKeyboard = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setConversationMenu(undefined)
+        setMoveMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', closeWithKeyboard)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      document.removeEventListener('keydown', closeWithKeyboard)
+    }
+  }, [conversationMenu])
+
+  const openConversationMenu = (
+    event: React.MouseEvent,
+    projectId: string,
+    conversationId: string,
+  ) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setOpenProjectMenuId(undefined)
+    setOrganizeMenuOpen(false)
+    setMoveMenuOpen(false)
+    setConversationMenu({
+      projectId,
+      conversationId,
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 244)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 390)),
+    })
+  }
+
+  const runConversationAction = async (action: () => Promise<void>) => {
+    setConversationMenu(undefined)
+    setMoveMenuOpen(false)
+    try {
+      await action()
+    } catch {
+      // 具体错误已经由上层操作统一显示为提示。
+    }
+  }
+
+  const beginRename = (conversation: Conversation) => {
+    setConversationMenu(undefined)
+    setMoveMenuOpen(false)
+    setRenameTarget(conversation)
+    setRenameDraft(conversationDisplayTitle(conversation.title, projectById.get(conversation.projectId)?.title ?? ''))
+  }
+
+  const submitRename = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!renameTarget || !renameDraft.trim()) return
+    setRenaming(true)
+    try {
+      await onUpdateConversation({ conversationId: renameTarget.id, title: renameDraft.trim() })
+      setRenameTarget(undefined)
+    } catch {
+      // 保留输入框，用户可直接修正后重试。
+    } finally {
+      setRenaming(false)
+    }
+  }
+
+  const startSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (collapsed) return
+    resizeStateRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: sidebarWidth,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.preventDefault()
+  }
+
+  const moveSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const resize = resizeStateRef.current
+    if (!resize || resize.pointerId !== event.pointerId) return
+    const next = Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, resize.startWidth + event.clientX - resize.startX))
+    latestSidebarWidthRef.current = Math.round(next)
+    onSidebarWidthChange(latestSidebarWidthRef.current)
+  }
+
+  const finishSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const resize = resizeStateRef.current
+    if (!resize || resize.pointerId !== event.pointerId) return
+    resizeStateRef.current = undefined
+    event.currentTarget.releasePointerCapture(event.pointerId)
+    onSidebarWidthCommit(latestSidebarWidthRef.current)
+  }
 
   const toggleProject = (projectId: string) => {
     const next = new Set(expandedIds)
@@ -350,7 +502,16 @@ function Sidebar({
     buttons[(currentIndex + direction + buttons.length) % buttons.length]?.focus()
   }
 
+  const menuConversation = conversationMenu
+    ? workspace.conversations.find((item) => item.id === conversationMenu.conversationId)
+    : undefined
+  const menuProject = menuConversation ? projectById.get(menuConversation.projectId) : undefined
+  const moveTargets = menuProject
+    ? workspace.projects.filter((project) => project.id !== menuProject.id && project.origin === menuProject.origin)
+    : []
+
   return (
+    <>
     <aside className={`sidebar${collapsed ? ' is-collapsed' : ''}`}>
       <div className="sidebar-titlebar window-drag-region">
         <button type="button" className="brand-mark no-drag" aria-label="学术 Agent 工作区" onClick={() => onRoute('workspace')}>
@@ -438,6 +599,16 @@ function Sidebar({
                         <SlidersHorizontal size={15} /> {label}
                       </button>
                     ))}
+                    <div className="menu-separator" />
+                    <button
+                      type="button"
+                      role="menuitemcheckbox"
+                      aria-checked={showArchived}
+                      onClick={() => onSetPreferences({ showArchived: !showArchived })}
+                    >
+                      <Check size={14} className={showArchived ? '' : 'is-placeholder'} />
+                      <Archive size={15} /> 显示已归档对话
+                    </button>
                     <div className="menu-separator" />
                     <button type="button" role="menuitem" onClick={() => { setOrganizeMenuOpen(false); onChooseFolder() }} disabled={choosingFolder} title={researchFolderLabel}>
                       {choosingFolder ? <LoaderCircle size={15} className="spin" /> : <FolderOpen size={15} />}
@@ -569,22 +740,39 @@ function Sidebar({
                                 const selected = active && route === 'workspace' && project.activeConversationId === conversation.id
                                 const title = conversationDisplayTitle(conversation.title, project.title)
                                 return (
-                                  <button
+                                  <div
                                     key={conversation.id}
-                                    type="button"
-                                    className={`research-conversation${selected ? ' is-active' : ''}${chatSort === 'manual' ? ' is-draggable' : ''}`}
-                                    onClick={() => onConversation(project.id, conversation.id)}
-                                    title={title}
-                                    aria-current={selected ? 'page' : undefined}
-                                    draggable={chatSort === 'manual'}
-                                    onDragStart={(event) => { event.stopPropagation(); setDragged({ kind: 'conversation', id: conversation.id }) }}
-                                    onDragOver={(event) => { if (chatSort === 'manual') event.preventDefault() }}
-                                    onDrop={(event) => { event.stopPropagation(); reorderConversations(projectConversations, conversation.id) }}
+                                    className={`research-conversation-row${selected ? ' is-active' : ''}${conversation.archived ? ' is-archived' : ''}`}
+                                    onContextMenu={(event) => openConversationMenu(event, project.id, conversation.id)}
                                   >
-                                    {chatSort === 'manual' && <GripVertical size={12} className="conversation-drag-handle" aria-hidden="true" />}
-                                    <span>{title}</span>
-                                    <small aria-label={`${conversation.messageIds.length} 条消息`}>{conversation.messageIds.length || ''}</small>
-                                  </button>
+                                    <button
+                                      type="button"
+                                      className={`research-conversation${selected ? ' is-active' : ''}${chatSort === 'manual' ? ' is-draggable' : ''}`}
+                                      onClick={() => onConversation(project.id, conversation.id)}
+                                      title={title}
+                                      aria-current={selected ? 'page' : undefined}
+                                      draggable={chatSort === 'manual'}
+                                      onDragStart={(event) => { event.stopPropagation(); setDragged({ kind: 'conversation', id: conversation.id }) }}
+                                      onDragOver={(event) => { if (chatSort === 'manual') event.preventDefault() }}
+                                      onDrop={(event) => { event.stopPropagation(); reorderConversations(projectConversations, conversation.id) }}
+                                    >
+                                      {chatSort === 'manual' && <GripVertical size={12} className="conversation-drag-handle" aria-hidden="true" />}
+                                      {conversation.unread && <span className="conversation-unread-dot" aria-label="未读" />}
+                                      <span>{title}</span>
+                                      {conversation.pinned && <Pin size={11} className="conversation-pinned-mark" aria-label="已置顶" />}
+                                      <small aria-label={`${conversation.messageIds.length} 条消息`}>{conversation.messageIds.length || ''}</small>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="conversation-more"
+                                      aria-label={`管理对话：${title}`}
+                                      title="对话操作"
+                                      aria-haspopup="menu"
+                                      onClick={(event) => openConversationMenu(event, project.id, conversation.id)}
+                                    >
+                                      <MoreHorizontal size={14} aria-hidden="true" />
+                                    </button>
+                                  </div>
                                 )
                               })
                             )}
@@ -600,20 +788,36 @@ function Sidebar({
                         const selected = project.id === activeProjectId && project.activeConversationId === conversation.id && route === 'workspace'
                         const title = conversationDisplayTitle(conversation.title, project.title)
                         return (
-                          <button
+                          <div
                             key={conversation.id}
-                            type="button"
-                            className={`flat-conversation${selected ? ' is-active' : ''}${chatSort === 'manual' ? ' is-draggable' : ''}`}
-                            onClick={() => onConversation(project.id, conversation.id)}
-                            draggable={chatSort === 'manual'}
-                            onDragStart={() => setDragged({ kind: 'conversation', id: conversation.id })}
-                            onDragOver={(event) => { if (chatSort === 'manual') event.preventDefault() }}
-                            onDrop={() => reorderConversations(flatConversations, conversation.id)}
+                            className={`flat-conversation-row${selected ? ' is-active' : ''}${conversation.archived ? ' is-archived' : ''}`}
+                            onContextMenu={(event) => openConversationMenu(event, project.id, conversation.id)}
                           >
-                            {chatSort === 'manual' && <GripVertical size={12} className="conversation-drag-handle" aria-hidden="true" />}
-                            <span><strong>{title}</strong><small>{project.title}</small></span>
-                            {project.pinned && <Pin size={11} aria-label="所属项目已置顶" />}
-                          </button>
+                            <button
+                              type="button"
+                              className={`flat-conversation${selected ? ' is-active' : ''}${chatSort === 'manual' ? ' is-draggable' : ''}`}
+                              onClick={() => onConversation(project.id, conversation.id)}
+                              draggable={chatSort === 'manual'}
+                              onDragStart={() => setDragged({ kind: 'conversation', id: conversation.id })}
+                              onDragOver={(event) => { if (chatSort === 'manual') event.preventDefault() }}
+                              onDrop={() => reorderConversations(flatConversations, conversation.id)}
+                            >
+                              {chatSort === 'manual' && <GripVertical size={12} className="conversation-drag-handle" aria-hidden="true" />}
+                              {conversation.unread && <span className="conversation-unread-dot" aria-label="未读" />}
+                              <span><strong>{title}</strong><small>{project.title}</small></span>
+                              {(conversation.pinned || project.pinned) && <Pin size={11} aria-label={conversation.pinned ? '对话已置顶' : '所属项目已置顶'} />}
+                            </button>
+                            <button
+                              type="button"
+                              className="conversation-more"
+                              aria-label={`管理对话：${title}`}
+                              title="对话操作"
+                              aria-haspopup="menu"
+                              onClick={(event) => openConversationMenu(event, project.id, conversation.id)}
+                            >
+                              <MoreHorizontal size={14} aria-hidden="true" />
+                            </button>
+                          </div>
                         )
                       })}
                     </div>
@@ -637,7 +841,170 @@ function Sidebar({
           </span>
         )}
       </div>
+      {!collapsed && (
+        <div
+          className="sidebar-resizer"
+          role="separator"
+          aria-label="调整左侧栏宽度"
+          aria-orientation="vertical"
+          aria-valuemin={MIN_SIDEBAR_WIDTH}
+          aria-valuemax={MAX_SIDEBAR_WIDTH}
+          aria-valuenow={sidebarWidth}
+          tabIndex={0}
+          onPointerDown={startSidebarResize}
+          onPointerMove={moveSidebarResize}
+          onPointerUp={finishSidebarResize}
+          onPointerCancel={finishSidebarResize}
+          onDoubleClick={() => {
+            latestSidebarWidthRef.current = DEFAULT_SIDEBAR_WIDTH
+            onSidebarWidthChange(DEFAULT_SIDEBAR_WIDTH)
+            onSidebarWidthCommit(DEFAULT_SIDEBAR_WIDTH)
+          }}
+          onKeyDown={(event) => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home'].includes(event.key)) return
+            event.preventDefault()
+            const next = event.key === 'Home'
+              ? DEFAULT_SIDEBAR_WIDTH
+              : Math.max(
+                  MIN_SIDEBAR_WIDTH,
+                  Math.min(MAX_SIDEBAR_WIDTH, sidebarWidth + (event.key === 'ArrowRight' ? 12 : -12)),
+                )
+            latestSidebarWidthRef.current = next
+            onSidebarWidthChange(next)
+            onSidebarWidthCommit(next)
+          }}
+        />
+      )}
     </aside>
+
+    {conversationMenu && menuConversation && menuProject && (
+      <div
+        ref={conversationMenuRef}
+        className="conversation-context-menu"
+        role="menu"
+        aria-label={`${conversationDisplayTitle(menuConversation.title, menuProject.title)}的对话操作`}
+        style={{ left: conversationMenu.x, top: conversationMenu.y }}
+        onKeyDown={menuKeyNavigation}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => runConversationAction(() => onUpdateConversation({
+            conversationId: menuConversation.id,
+            pinned: !menuConversation.pinned,
+          }))}
+        >
+          {menuConversation.pinned ? <PinOff size={16} /> : <Pin size={16} />}
+          {menuConversation.pinned ? '取消置顶聊天' : '置顶聊天'}
+        </button>
+        <div className="conversation-move-entry">
+          <button
+            type="button"
+            role="menuitem"
+            aria-haspopup="menu"
+            aria-expanded={moveMenuOpen}
+            disabled={moveTargets.length === 0}
+            onClick={() => setMoveMenuOpen((current) => !current)}
+          >
+            <FolderInput size={16} />
+            移至研究
+            <ChevronRight size={15} className="menu-trailing-icon" />
+          </button>
+          {moveMenuOpen && (
+            <div className="conversation-move-submenu" role="menu" aria-label="选择目标研究">
+              {moveTargets.map((project) => (
+                <button
+                  key={project.id}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => runConversationAction(() => onMoveConversation(menuConversation.id, project.id))}
+                >
+                  <Folder size={15} />
+                  <span>{project.title}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <button type="button" role="menuitem" onClick={() => beginRename(menuConversation)}>
+          <PencilLine size={16} />
+          重命名聊天
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => runConversationAction(() => onUpdateConversation({
+            conversationId: menuConversation.id,
+            archived: !menuConversation.archived,
+          }))}
+        >
+          {menuConversation.archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
+          {menuConversation.archived ? '取消归档聊天' : '归档聊天'}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => runConversationAction(() => onUpdateConversation({
+            conversationId: menuConversation.id,
+            unread: !menuConversation.unread,
+          }))}
+        >
+          {menuConversation.unread ? <MailOpen size={16} /> : <Mail size={16} />}
+          {menuConversation.unread ? '标记为已读' : '标记为未读'}
+        </button>
+        <div className="menu-separator" />
+        <button type="button" role="menuitem" onClick={() => runConversationAction(async () => onRevealProject(menuProject.id))}>
+          <FolderOpen size={16} />
+          在 Finder 中显示
+        </button>
+        <button type="button" role="menuitem" onClick={() => runConversationAction(() => onCopyConversationId(menuConversation.id))}>
+          <Copy size={16} />
+          复制会话 ID
+        </button>
+        <div className="menu-separator" />
+        <button type="button" role="menuitem" onClick={() => runConversationAction(async () => onCreateConversation(menuProject.id))}>
+          <MessageSquarePlus size={16} />
+          在新对话中继续
+        </button>
+      </div>
+    )}
+
+    {renameTarget && (
+      <div className="modal-backdrop conversation-rename-backdrop" role="presentation" onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !renaming) setRenameTarget(undefined)
+      }}>
+        <form className="conversation-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-rename-title" onSubmit={submitRename}>
+          <div className="modal-header">
+            <div>
+              <span className="modal-icon"><PencilLine size={18} /></span>
+              <div>
+                <h2 id="conversation-rename-title">重命名聊天</h2>
+                <p>只修改侧栏显示名称，不会改变已有消息或研究资料。</p>
+              </div>
+            </div>
+            <IconButton icon={X} label="关闭" disabled={renaming} onClick={() => setRenameTarget(undefined)} />
+          </div>
+          <label>
+            <span>聊天名称</span>
+            <input
+              autoFocus
+              value={renameDraft}
+              onChange={(event) => setRenameDraft(event.target.value)}
+              maxLength={120}
+              required
+            />
+          </label>
+          <div className="conversation-rename-actions">
+            <button type="button" className="secondary-button" disabled={renaming} onClick={() => setRenameTarget(undefined)}>取消</button>
+            <button type="submit" className="primary-button compact" disabled={renaming || !renameDraft.trim()}>
+              {renaming ? <LoaderCircle size={15} className="spin" /> : <Save size={15} />}
+              保存名称
+            </button>
+          </div>
+        </form>
+      </div>
+    )}
+    </>
   )
 }
 
@@ -2489,6 +2856,7 @@ export function App() {
   const [centerMode, setCenterMode] = useState<CenterMode>('chat')
   const [rightTab, setRightTab] = useState<RightTab>('literature')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH)
   const [rightOpen, setRightOpen] = useState(true)
   const [newProjectOpen, setNewProjectOpen] = useState(false)
   const [creatingProject, setCreatingProject] = useState(false)
@@ -2517,6 +2885,12 @@ export function App() {
       .catch(() => setToast({ message: '无法读取本机工作区', tone: 'error' }))
       .finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => {
+    if (typeof workspace.settings.sidebarWidth === 'number') {
+      setSidebarWidth(workspace.settings.sidebarWidth)
+    }
+  }, [workspace.settings.sidebarWidth])
 
   useEffect(() => {
     if (!toast) return
@@ -2625,6 +2999,44 @@ export function App() {
       showToast('已在该研究中新建对话')
     } catch (error) {
       showToast(error instanceof Error ? error.message : '新建对话失败', 'error')
+    }
+  }
+
+  const updateConversation = async (input: ConversationUpdateInput) => {
+    try {
+      const next = await paperAgent.conversation.update(input)
+      setWorkspace(next)
+      if (input.archived === true) showToast('聊天已归档，可在“整理侧边栏”中重新显示')
+      else if (input.archived === false) showToast('聊天已取消归档')
+      else if (input.pinned === true) showToast('聊天已置顶')
+      else if (input.pinned === false) showToast('已取消置顶聊天')
+      else if (input.title !== undefined) showToast('聊天名称已更新')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '更新聊天失败', 'error')
+      throw error
+    }
+  }
+
+  const moveConversation = async (conversationId: string, targetProjectId: string) => {
+    try {
+      const next = await paperAgent.conversation.move(conversationId, targetProjectId)
+      setWorkspace(next)
+      setRoute('workspace')
+      setCenterMode('chat')
+      showToast('聊天已移至目标研究')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '移动聊天失败', 'error')
+      throw error
+    }
+  }
+
+  const copyConversationId = async (conversationId: string) => {
+    try {
+      await paperAgent.conversation.copyId(conversationId)
+      showToast('会话 ID 已复制')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '复制会话 ID 失败', 'error')
+      throw error
     }
   }
 
@@ -2887,7 +3299,10 @@ export function App() {
   }
 
   return (
-    <main className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}${rightOpen ? '' : ' right-collapsed'}`}>
+    <main
+      className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}${rightOpen ? '' : ' right-collapsed'}`}
+      style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
+    >
       <Sidebar
         workspace={workspace}
         activeProjectId={activeProject?.id}
@@ -2898,12 +3313,18 @@ export function App() {
         onProject={selectProject}
         onConversation={selectConversation}
         onCreateConversation={createConversation}
+        onUpdateConversation={updateConversation}
+        onMoveConversation={moveConversation}
+        onCopyConversationId={copyConversationId}
         onPinProject={setProjectPinned}
         onSetPreferences={setSidebarPreferences}
         onCreate={() => setNewProjectOpen(true)}
         onChooseFolder={chooseResearchFolder}
         onDeleteProject={setProjectPendingDeletionId}
         onRevealProject={revealResearchFolder}
+        sidebarWidth={sidebarWidth}
+        onSidebarWidthChange={setSidebarWidth}
+        onSidebarWidthCommit={(width) => setSidebarPreferences({ sidebarWidth: width })}
         choosingFolder={choosingFolder}
       />
 

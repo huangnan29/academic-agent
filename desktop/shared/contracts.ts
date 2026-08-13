@@ -52,8 +52,22 @@ export interface Conversation extends BaseEntity {
   projectId: string
   title: string
   messageIds: string[]
+  /** 对话可独立于所属研究置顶。 */
+  pinned?: boolean
+  /** 归档后默认从侧栏隐藏，但仍保留全部消息。 */
+  archived?: boolean
+  /** 用户手动标记的未读状态。 */
+  unread?: boolean
   /** 用户选择手动排序时使用的稳定顺序。 */
   manualOrder?: number
+}
+
+export interface ConversationUpdateInput {
+  conversationId: string
+  title?: string
+  pinned?: boolean
+  archived?: boolean
+  unread?: boolean
 }
 
 export type SidebarViewMode = 'projects' | 'list'
@@ -63,6 +77,8 @@ export interface SidebarPreferencesInput {
   viewMode?: SidebarViewMode
   chatSort?: SidebarChatSort
   expandedProjectIds?: string[]
+  showArchived?: boolean
+  sidebarWidth?: number
   projectOrder?: string[]
   conversationOrder?: string[]
 }
@@ -294,6 +310,10 @@ export interface WorkspaceState {
     sidebarChatSort?: SidebarChatSort
     /** 独立持久化每个项目的展开状态，不与当前项目绑定。 */
     sidebarExpandedProjectIds?: string[]
+    /** 是否在侧栏中显示已经归档的对话。 */
+    sidebarShowArchived?: boolean
+    /** 展开状态下由用户拖动保存的侧栏宽度。 */
+    sidebarWidth?: number
     demoMode: boolean
   }
 }
