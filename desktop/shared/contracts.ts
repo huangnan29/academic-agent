@@ -42,12 +42,29 @@ export interface Project extends BaseEntity {
   activeSectionId?: string
   /** 用户可选的研究资料目录；未设置时继续使用应用默认本机目录。 */
   researchFolderPath?: string
+  /** Codex 式侧栏中的项目置顶状态。 */
+  pinned?: boolean
+  /** 用户选择手动排序时使用的稳定顺序。 */
+  manualOrder?: number
 }
 
 export interface Conversation extends BaseEntity {
   projectId: string
   title: string
   messageIds: string[]
+  /** 用户选择手动排序时使用的稳定顺序。 */
+  manualOrder?: number
+}
+
+export type SidebarViewMode = 'projects' | 'list'
+export type SidebarChatSort = 'priority' | 'recent' | 'manual'
+
+export interface SidebarPreferencesInput {
+  viewMode?: SidebarViewMode
+  chatSort?: SidebarChatSort
+  expandedProjectIds?: string[]
+  projectOrder?: string[]
+  conversationOrder?: string[]
 }
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
@@ -271,6 +288,12 @@ export interface WorkspaceState {
     activeModel?: string
     /** 后续新建研究的根目录；未设置时使用系统“文稿/学术 Agent”。 */
     researchRootPath?: string
+    /** 左侧栏按项目树或单一对话列表显示。 */
+    sidebarViewMode?: SidebarViewMode
+    /** 对话与项目的排序规则。 */
+    sidebarChatSort?: SidebarChatSort
+    /** 独立持久化每个项目的展开状态，不与当前项目绑定。 */
+    sidebarExpandedProjectIds?: string[]
     demoMode: boolean
   }
 }

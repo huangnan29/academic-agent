@@ -21,6 +21,14 @@ export const researchBriefSchema = z.object({
   keywords: z.array(z.string().trim().min(1).max(80)).max(20),
 })
 
+export const sidebarPreferencesSchema = z.object({
+  viewMode: z.enum(['projects', 'list']).optional(),
+  chatSort: z.enum(['priority', 'recent', 'manual']).optional(),
+  expandedProjectIds: z.array(z.string().min(1).max(200)).max(10_000).optional(),
+  projectOrder: z.array(z.string().min(1).max(200)).max(10_000).optional(),
+  conversationOrder: z.array(z.string().min(1).max(200)).max(50_000).optional(),
+}).strict()
+
 export const providerInputSchema = z.object({
   id: z.string().uuid().optional(),
   name: z.string().trim().min(1).max(80),

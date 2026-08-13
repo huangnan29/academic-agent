@@ -198,4 +198,41 @@
 - 图像与图标：继续使用 `lucide-react` 的 Folder/FolderOpen；只固定布局尺寸，没有替换资产或手绘 SVG。
 - 交互状态：已在原生应用中分别点击两个项目，验证 Folder/FolderOpen 相互切换时尺寸不变；本轮未启动 Chrome。
 
+## 12. Codex 式项目树、多对话与整理菜单复验
+
+### 12.1 视觉真值、实现证据与归一化
+
+- 多对话参考：`/var/folders/nh/ytrqnycn7hx1xk7q138h1q540000gn/T/codex-clipboard-d5d010f8-03a2-4616-8dc4-278b824a28e9.png`，656×402。
+- 项目操作参考：`/var/folders/nh/ytrqnycn7hx1xk7q138h1q540000gn/T/codex-clipboard-9ae4cdd3-35ae-4f2e-88ae-0189a84fd9f4.png`，324×358。
+- 整理菜单参考：`/var/folders/nh/ytrqnycn7hx1xk7q138h1q540000gn/T/codex-clipboard-aab6181b-02cb-4558-81a6-897ec232f903.png`，854×436。
+- 原生实现截图：`desktop/output/native-latest/codex-sidebar/project-conversations.png`、`project-menu.png`、`organize-list.png`、`organize-manual.png`，均为 2960×1880；Electron CSS 视口为 1480×940，`deviceScaleFactor=2`。
+- 聚焦同画布比较：`desktop/output/native-latest/codex-sidebar/compare/conversations-source-vs-native.png`（1312×402）、`project-menu-source-vs-native.png`（648×358）、`organize-source-vs-native.png`（1708×436）。实现区域从原生截图裁取，按参考图尺寸等比缩放并补白，未把参考截图的红色批注框当成界面元素。
+
+### 12.2 比较历史与修复
+
+- 初始 P1：旧侧栏只显示当前项目的一条活动对话，项目展开状态与“当前项目”耦合；项目内新建对话、置顶、布局切换和排序均不存在。
+- 修复：新增持久化的项目展开集合、项目置顶与手动顺序；新增项目内对话创建和切换；新增“按项目 / 在一个列表中”以及“优先级 / 最近更新 / 手动排序”；手动模式启用原生拖动顺序。
+- 初次原生视觉复验发现 P2：菜单打开时首项的全局品牌色焦点环过重，与 Codex 的浅灰选中态不一致。
+- 二次修复：项目菜单与整理菜单的 `:focus-visible` 保留浅灰背景和键盘焦点语义，但去掉菜单内部双层品牌色光环。
+- 最终同画布复验未发现仍需修复的 P0/P1/P2；参考图中的“创建永久工作树、编辑项目、归档聊天”属于 Codex 自身功能，并非本轮用户列出的学术 Agent 需求，没有添加无后端能力的占位菜单。
+
+### 12.3 功能与持久化证据
+
+- 项目独立展开、收起、再次展开通过；状态由 `sidebarExpandedProjectIds` 持久化，不再随当前项目强制展开。
+- 在真实项目中通过项目行按钮新建第二条对话，对话数由 1 变为 2；新对话立即成为活动对话，随后成功切回原对话。
+- 通过项目菜单完成置顶和取消置顶；菜单文案随状态在“置顶项目 / 取消置顶项目”之间变化，最终恢复原状态。
+- 通过整理菜单往返“按项目 / 在一个列表中”；依次切换优先级、最近更新、手动排序，工作区设置与可见列表同步。
+- 手动模式下项目行和对话行均具备可拖动状态，顺序通过同一侧栏偏好接口持久化。
+- 在临时验收工作区中退出并重新启动应用后，第二条对话、项目布局、手动排序和项目展开状态均恢复；重启持久化检查通过。
+- 验收脚本：`desktop/qa/cdp-sidebar-smoke.mjs`。验收前备份 `workspace.json`，结束后恢复原文件并以正常模式重启应用，未在用户工作区留下临时对话或排序状态。
+
+### 12.4 必查表面
+
+- 字体与文案：沿用 macOS 系统字体；项目标题、对话标题、菜单分组和计数层级与 Codex 参考一致，长标题继续省略而不挤压图标。
+- 间距与布局：项目行 34px，对话行 34px；独立折叠箭头、16px 文件夹、项目内新建对话和更多操作保持稳定网格。
+- 颜色与 token：使用现有浅灰悬停/选中表面、弱边框和危险删除色，没有复制参考图中的红色标注框。
+- 图像与图标：全部使用现有 `lucide-react` 图标库，没有手绘 SVG、字符图标或占位资源。
+- 交互与可访问性：菜单包含 `menu`、`menuitem`、`menuitemradio`、`aria-checked`，支持 Esc、上下方向键和可见焦点；项目展开使用 `aria-expanded`。
+- 原生边界：类型检查、生产构建、Apple Silicon `.app` 打包和安装副本交互通过；本轮没有启动 Chrome，也没有生成新的 DMG。
+
 final result: passed

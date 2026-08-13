@@ -27,6 +27,7 @@ import {
   providerInputSchema,
   researchBriefSchema,
   sectionGenerateSchema,
+  sidebarPreferencesSchema,
   skillInputSchema,
 } from './schemas'
 import { isAllowedExternalUrl } from './window'
@@ -68,6 +69,10 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
     return repository.setActiveModel(providerId, model)
   })
 
+  handle(IPC.workspaceSetSidebarPreferences, async (_event, payload: unknown) => {
+    return repository.setSidebarPreferences(sidebarPreferencesSchema.parse(payload))
+  })
+
   handle(IPC.projectCreate, async (_event, payload) => {
     const brief = researchBriefSchema.parse(payload)
     const project = await repository.createProject(brief)
@@ -91,6 +96,12 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
   handle(IPC.projectSetActive, async (_event, projectId: unknown) => {
     assertId(projectId, '项目')
     return repository.setActiveProject(projectId)
+  })
+
+  handle(IPC.projectSetPinned, async (_event, projectId: unknown, pinned: unknown) => {
+    assertId(projectId, '项目')
+    if (typeof pinned !== 'boolean') throw new Error('项目置顶状态无效。')
+    return repository.setProjectPinned(projectId, pinned)
   })
 
   handle(IPC.projectDelete, async (_event, projectId: unknown) => {
@@ -143,6 +154,20 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
     }
     shell.showItemInFolder(folderPath)
   })
+
+  handle(IPC.conversationCreate, async (_event, projectId: unknown) => {
+    assertId(projectId, '项目')
+    return repository.createConversation(projectId)
+  })
+
+  handle(
+    IPC.conversationSetActive,
+    async (_event, projectId: unknown, conversationId: unknown) => {
+      assertId(projectId, '项目')
+      assertId(conversationId, '对话')
+      return repository.setActiveConversation(projectId, conversationId)
+    },
+  )
 
   handle(IPC.providerSave, async (_event, payload) => {
     const input = providerInputSchema.parse(payload)

@@ -11,6 +11,7 @@ import type {
   ProviderInput,
   ResearchBrief,
   SectionGenerateInput,
+  SidebarPreferencesInput,
   SkillInput,
 } from '../../shared/contracts'
 
@@ -19,13 +20,22 @@ const api = {
     get: () => ipcRenderer.invoke(IPC.workspaceGet),
     setActiveModel: (providerId: string, model: string) =>
       ipcRenderer.invoke(IPC.workspaceSetActiveModel, providerId, model),
+    setSidebarPreferences: (input: SidebarPreferencesInput) =>
+      ipcRenderer.invoke(IPC.workspaceSetSidebarPreferences, input),
   },
   project: {
     create: (input: ResearchBrief) => ipcRenderer.invoke(IPC.projectCreate, input),
     setActive: (projectId: string) => ipcRenderer.invoke(IPC.projectSetActive, projectId),
+    setPinned: (projectId: string, pinned: boolean) =>
+      ipcRenderer.invoke(IPC.projectSetPinned, projectId, pinned),
     delete: (projectId: string) => ipcRenderer.invoke(IPC.projectDelete, projectId),
     chooseFolder: () => ipcRenderer.invoke(IPC.projectChooseFolder),
     revealFolder: (projectId: string) => ipcRenderer.invoke(IPC.projectRevealFolder, projectId),
+  },
+  conversation: {
+    create: (projectId: string) => ipcRenderer.invoke(IPC.conversationCreate, projectId),
+    setActive: (projectId: string, conversationId: string) =>
+      ipcRenderer.invoke(IPC.conversationSetActive, projectId, conversationId),
   },
   provider: {
     save: (input: ProviderInput) => ipcRenderer.invoke(IPC.providerSave, input),

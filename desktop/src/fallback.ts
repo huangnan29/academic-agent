@@ -533,6 +533,8 @@ const initialWorkspace = (): WorkspaceState => {
     },
     activeConversationId: 'conversation-demo',
     activeSectionId: 'section-1',
+    pinned: false,
+    manualOrder: 0,
     origin: 'demo',
     verificationStatus: 'demo',
     createdAt: now(),
@@ -544,6 +546,7 @@ const initialWorkspace = (): WorkspaceState => {
     projectId: project.id,
     title: '生成式 AI 赋能高校写作教学研究',
     messageIds: ['message-user-01', 'message-assistant-01'],
+    manualOrder: 0,
     origin: 'demo',
     verificationStatus: 'demo',
     createdAt: now(),
@@ -650,6 +653,9 @@ const initialWorkspace = (): WorkspaceState => {
       activeProjectId: project.id,
       activeProviderId: provider.id,
       activeModel: provider.defaultModel,
+      sidebarViewMode: 'projects',
+      sidebarChatSort: 'priority',
+      sidebarExpandedProjectIds: [project.id],
       demoMode: true,
     },
   }
@@ -700,9 +706,34 @@ function readState(): WorkspaceState {
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY)
     const parsed = stored ? (JSON.parse(stored) as WorkspaceState) : initialWorkspace()
-    const normalized = {
+    const normalized: WorkspaceState = {
       ...parsed,
+      projects: (parsed.projects ?? []).map((project, index) => ({
+        ...project,
+        pinned: project.pinned === true,
+        manualOrder: typeof project.manualOrder === 'number' ? project.manualOrder : index,
+      })),
+      conversations: (parsed.conversations ?? []).map((conversation, index) => ({
+        ...conversation,
+        manualOrder: typeof conversation.manualOrder === 'number' ? conversation.manualOrder : index,
+      })),
       skills: Array.isArray(parsed.skills) ? parsed.skills : [],
+      settings: {
+        ...parsed.settings,
+        sidebarViewMode: parsed.settings?.sidebarViewMode === 'list' ? 'list' : 'projects',
+        sidebarChatSort: ['priority', 'recent', 'manual'].includes(
+          parsed.settings?.sidebarChatSort ?? '',
+        )
+          ? parsed.settings.sidebarChatSort
+          : 'priority',
+        sidebarExpandedProjectIds: Array.isArray(parsed.settings?.sidebarExpandedProjectIds)
+          ? parsed.settings.sidebarExpandedProjectIds.filter((id) =>
+              (parsed.projects ?? []).some((project) => project.id === id),
+            )
+          : parsed.settings?.activeProjectId
+            ? [parsed.settings.activeProjectId]
+            : [],
+      },
     }
     memoryState = migrateDefaultDemoOutline(normalized)
     synchronizeDerivedSections(memoryState)
@@ -748,6 +779,29 @@ const fallbackApi: PaperAgentApi = {
       })
       return clone(next)
     },
+    async setSidebarPreferences(input) {
+      const next = mutate((draft) => {
+        if (input.viewMode) draft.settings.sidebarViewMode = input.viewMode
+        if (input.chatSort) draft.settings.sidebarChatSort = input.chatSort
+        if (input.expandedProjectIds) {
+          const known = new Set(draft.projects.map((project) => project.id))
+          draft.settings.sidebarExpandedProjectIds = [...new Set(input.expandedProjectIds)].filter((id) => known.has(id))
+        }
+        if (input.projectOrder) {
+          const order = new Map(input.projectOrder.map((id, index) => [id, index]))
+          draft.projects.forEach((project, index) => {
+            project.manualOrder = order.get(project.id) ?? input.projectOrder!.length + index
+          })
+        }
+        if (input.conversationOrder) {
+          const order = new Map(input.conversationOrder.map((id, index) => [id, index]))
+          draft.conversations.forEach((conversation, index) => {
+            conversation.manualOrder = order.get(conversation.id) ?? input.conversationOrder!.length + index
+          })
+        }
+      })
+      return clone(next)
+    },
   },
   project: {
     async create(brief) {
@@ -760,6 +814,8 @@ const fallbackApi: PaperAgentApi = {
         status: 'draft',
         brief,
         activeConversationId: conversationId,
+        pinned: false,
+        manualOrder: Math.min(0, ...readState().projects.map((item) => item.manualOrder ?? 0)) - 1,
         origin: 'demo',
         verificationStatus: 'demo',
         createdAt,
@@ -770,6 +826,7 @@ const fallbackApi: PaperAgentApi = {
         projectId,
         title: brief.title,
         messageIds: [],
+        manualOrder: 0,
         origin: 'demo',
         verificationStatus: 'demo',
         createdAt,
@@ -780,6 +837,10 @@ const fallbackApi: PaperAgentApi = {
         draft.conversations.unshift(conversation)
         draft.outlines[projectId] = []
         draft.settings.activeProjectId = projectId
+        draft.settings.sidebarExpandedProjectIds = [
+          projectId,
+          ...(draft.settings.sidebarExpandedProjectIds ?? []).filter((id) => id !== projectId),
+        ]
         draft.settings.demoMode = true
         restoreActiveModelIfNeeded(draft)
       })
@@ -791,6 +852,14 @@ const fallbackApi: PaperAgentApi = {
         const project = draft.projects.find((item) => item.id === projectId)
         if (project) draft.settings.demoMode = project.origin === 'demo'
         restoreActiveModelIfNeeded(draft)
+      })
+      return clone(next)
+    },
+    async setPinned(projectId, pinned) {
+      const next = mutate((draft) => {
+        const project = draft.projects.find((item) => item.id === projectId)
+        if (!project) throw new Error('项目不存在或已经被移除')
+        project.pinned = pinned
       })
       return clone(next)
     },
@@ -826,6 +895,9 @@ const fallbackApi: PaperAgentApi = {
         draft.runs = draft.runs.filter((item) => item.projectId !== projectId)
         draft.artifacts = draft.artifacts.filter((item) => item.projectId !== projectId)
         delete draft.outlines[projectId]
+        draft.settings.sidebarExpandedProjectIds = (
+          draft.settings.sidebarExpandedProjectIds ?? []
+        ).filter((id) => id !== projectId)
         if (draft.settings.activeProjectId === projectId) {
           const fallback = draft.projects.find((item) => item.origin !== 'demo') ?? draft.projects[0]
           draft.settings.activeProjectId = fallback?.id
@@ -845,6 +917,48 @@ const fallbackApi: PaperAgentApi = {
       const project = readState().projects.find((item) => item.id === projectId)
       if (!project) throw new Error('项目不存在或已经被移除')
       throw new Error('浏览器演示无法打开 Finder，请使用桌面应用。')
+    },
+  },
+  conversation: {
+    async create(projectId) {
+      const next = mutate((draft) => {
+        const project = draft.projects.find((item) => item.id === projectId)
+        if (!project) throw new Error('项目不存在或已经被移除')
+        const projectConversations = draft.conversations.filter((item) => item.projectId === projectId)
+        const timestamp = now()
+        const conversation: Conversation = {
+          id: makeId('conversation'),
+          projectId,
+          title: projectConversations.length === 0 ? '新对话' : `新对话 ${projectConversations.length + 1}`,
+          messageIds: [],
+          manualOrder: Math.min(0, ...projectConversations.map((item) => item.manualOrder ?? 0)) - 1,
+          origin: project.origin,
+          verificationStatus: project.verificationStatus,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }
+        draft.conversations.unshift(conversation)
+        project.activeConversationId = conversation.id
+        project.updatedAt = timestamp
+        draft.settings.activeProjectId = project.id
+        draft.settings.sidebarExpandedProjectIds = [
+          project.id,
+          ...(draft.settings.sidebarExpandedProjectIds ?? []).filter((id) => id !== project.id),
+        ]
+      })
+      return clone(next)
+    },
+    async setActive(projectId, conversationId) {
+      const next = mutate((draft) => {
+        const project = draft.projects.find((item) => item.id === projectId)
+        const conversation = draft.conversations.find(
+          (item) => item.id === conversationId && item.projectId === projectId,
+        )
+        if (!project || !conversation) throw new Error('对话不存在或不属于该项目')
+        project.activeConversationId = conversation.id
+        draft.settings.activeProjectId = project.id
+      })
+      return clone(next)
     },
   },
   provider: {
@@ -1061,7 +1175,16 @@ const fallbackApi: PaperAgentApi = {
       mutate((draft) => {
         draft.messages.push(userMessage, assistant)
         const conversation = draft.conversations.find((item) => item.id === input.conversationId)
-        conversation?.messageIds.push(userId, assistantId)
+        if (conversation) {
+          const wasEmpty = conversation.messageIds.length === 0
+          conversation.messageIds.push(userId, assistantId)
+          if (wasEmpty && /^(新的研究任务|新对话(?:\s+\d+)?)$/.test(conversation.title)) {
+            conversation.title = input.content.trim().replace(/\s+/g, ' ').slice(0, 42) || conversation.title
+          }
+          conversation.updatedAt = createdAt
+        }
+        const project = draft.projects.find((item) => item.id === input.projectId)
+        if (project) project.updatedAt = createdAt
       })
       window.setTimeout(() => emit({ runId, type: 'started', message: clone(assistant) }), 0)
       const timers: number[] = []

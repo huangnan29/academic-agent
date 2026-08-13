@@ -15,6 +15,7 @@ import type {
   ProviderInput,
   ProviderProfile,
   SectionGenerateInput,
+  SidebarPreferencesInput,
   SkillDefinition,
   SkillInput,
   WorkspaceState,
@@ -26,13 +27,19 @@ declare global {
       workspace: {
         get(): Promise<WorkspaceState>
         setActiveModel(providerId: string, model: string): Promise<WorkspaceState>
+        setSidebarPreferences(input: SidebarPreferencesInput): Promise<WorkspaceState>
       }
       project: {
         create(input: Project['brief']): Promise<Project>
         setActive(projectId: string): Promise<WorkspaceState>
+        setPinned(projectId: string, pinned: boolean): Promise<WorkspaceState>
         delete(projectId: string): Promise<WorkspaceState>
         chooseFolder(): Promise<WorkspaceState>
         revealFolder(projectId: string): Promise<void>
+      }
+      conversation: {
+        create(projectId: string): Promise<WorkspaceState>
+        setActive(projectId: string, conversationId: string): Promise<WorkspaceState>
       }
       provider: {
         save(input: ProviderInput): Promise<ProviderProfile>

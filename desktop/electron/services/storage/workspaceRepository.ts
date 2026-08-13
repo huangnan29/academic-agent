@@ -14,6 +14,7 @@ import type {
   Project,
   ProviderProfile,
   ResearchBrief,
+  SidebarPreferencesInput,
   SkillDefinition,
   SkillInput,
   WorkspaceState,
@@ -201,6 +202,9 @@ function demoState(): WorkspaceState {
     artifacts: [],
     settings: {
       activeProjectId: projectId,
+      sidebarViewMode: 'projects',
+      sidebarChatSort: 'priority',
+      sidebarExpandedProjectIds: [projectId],
       demoMode: true,
     },
   }
@@ -212,8 +216,15 @@ function normalizeState(candidate: Partial<WorkspaceState>): WorkspaceState {
     ...base,
     ...candidate,
     schemaVersion: 1,
-    projects: candidate.projects ?? base.projects,
-    conversations: candidate.conversations ?? base.conversations,
+    projects: (candidate.projects ?? base.projects).map((project, index) => ({
+      ...project,
+      pinned: project.pinned === true,
+      manualOrder: typeof project.manualOrder === 'number' ? project.manualOrder : index,
+    })),
+    conversations: (candidate.conversations ?? base.conversations).map((conversation, index) => ({
+      ...conversation,
+      manualOrder: typeof conversation.manualOrder === 'number' ? conversation.manualOrder : index,
+    })),
     messages: candidate.messages ?? base.messages,
     providers: candidate.providers ?? [],
     literature: candidate.literature ?? base.literature,
@@ -239,6 +250,20 @@ function normalizeState(candidate: Partial<WorkspaceState>): WorkspaceState {
   } else {
     normalized.settings.demoMode = activeProject.origin === 'demo'
   }
+  normalized.settings.sidebarViewMode = normalized.settings.sidebarViewMode === 'list' ? 'list' : 'projects'
+  normalized.settings.sidebarChatSort = ['priority', 'recent', 'manual'].includes(
+    normalized.settings.sidebarChatSort ?? '',
+  )
+    ? normalized.settings.sidebarChatSort
+    : 'priority'
+  const knownProjectIds = new Set(normalized.projects.map((project) => project.id))
+  normalized.settings.sidebarExpandedProjectIds = Array.isArray(
+    normalized.settings.sidebarExpandedProjectIds,
+  )
+    ? [...new Set(normalized.settings.sidebarExpandedProjectIds)].filter((id) => knownProjectIds.has(id))
+    : normalized.settings.activeProjectId
+      ? [normalized.settings.activeProjectId]
+      : []
   return normalized
 }
 
@@ -310,6 +335,8 @@ export class WorkspaceRepository {
         brief,
         status: 'draft',
         activeConversationId: conversationId,
+        pinned: false,
+        manualOrder: Math.min(0, ...state.projects.map((item) => item.manualOrder ?? 0)) - 1,
         origin: 'live',
         verificationStatus: 'unverified',
         createdAt: timestamp,
@@ -320,6 +347,7 @@ export class WorkspaceRepository {
         projectId,
         title: '新的研究任务',
         messageIds: [],
+        manualOrder: 0,
         origin: 'live',
         verificationStatus: 'unverified',
         createdAt: timestamp,
@@ -329,6 +357,10 @@ export class WorkspaceRepository {
       state.conversations.unshift(conversation)
       state.outlines[projectId] = []
       state.settings.activeProjectId = projectId
+      state.settings.sidebarExpandedProjectIds = [
+        projectId,
+        ...(state.settings.sidebarExpandedProjectIds ?? []).filter((id) => id !== projectId),
+      ]
       state.settings.demoMode = false
       synchronizeActiveModelSelection(state)
       return project
@@ -344,6 +376,85 @@ export class WorkspaceRepository {
       state.settings.activeProjectId = projectId
       state.settings.demoMode = project.origin === 'demo'
       synchronizeActiveModelSelection(state)
+      return state
+    })
+  }
+
+  async setProjectPinned(projectId: string, pinned: boolean): Promise<WorkspaceState> {
+    return this.mutate((state) => {
+      const project = state.projects.find((item) => item.id === projectId)
+      if (!project) throw new Error('项目不存在或已经被移除。')
+      project.pinned = pinned
+      return state
+    })
+  }
+
+  async createConversation(projectId: string): Promise<WorkspaceState> {
+    return this.mutate((state) => {
+      const project = state.projects.find((item) => item.id === projectId)
+      if (!project) throw new Error('项目不存在或已经被移除。')
+      const timestamp = now()
+      const projectConversations = state.conversations.filter((item) => item.projectId === projectId)
+      const conversation: Conversation = {
+        id: randomUUID(),
+        projectId,
+        title: projectConversations.length === 0 ? '新对话' : `新对话 ${projectConversations.length + 1}`,
+        messageIds: [],
+        manualOrder: Math.min(0, ...projectConversations.map((item) => item.manualOrder ?? 0)) - 1,
+        origin: project.origin,
+        verificationStatus: project.verificationStatus,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }
+      state.conversations.unshift(conversation)
+      project.activeConversationId = conversation.id
+      project.updatedAt = timestamp
+      state.settings.activeProjectId = project.id
+      state.settings.demoMode = project.origin === 'demo'
+      state.settings.sidebarExpandedProjectIds = [
+        project.id,
+        ...(state.settings.sidebarExpandedProjectIds ?? []).filter((id) => id !== project.id),
+      ]
+      synchronizeActiveModelSelection(state)
+      return state
+    })
+  }
+
+  async setActiveConversation(projectId: string, conversationId: string): Promise<WorkspaceState> {
+    return this.mutate((state) => {
+      const project = state.projects.find((item) => item.id === projectId)
+      const conversation = state.conversations.find(
+        (item) => item.id === conversationId && item.projectId === projectId,
+      )
+      if (!project || !conversation) throw new Error('对话不存在或不属于该项目。')
+      project.activeConversationId = conversation.id
+      state.settings.activeProjectId = project.id
+      state.settings.demoMode = project.origin === 'demo'
+      synchronizeActiveModelSelection(state)
+      return state
+    })
+  }
+
+  async setSidebarPreferences(input: SidebarPreferencesInput): Promise<WorkspaceState> {
+    return this.mutate((state) => {
+      if (input.viewMode) state.settings.sidebarViewMode = input.viewMode
+      if (input.chatSort) state.settings.sidebarChatSort = input.chatSort
+      if (input.expandedProjectIds) {
+        const known = new Set(state.projects.map((project) => project.id))
+        state.settings.sidebarExpandedProjectIds = [...new Set(input.expandedProjectIds)].filter((id) => known.has(id))
+      }
+      if (input.projectOrder) {
+        const order = new Map(input.projectOrder.map((id, index) => [id, index]))
+        state.projects.forEach((project, index) => {
+          project.manualOrder = order.get(project.id) ?? input.projectOrder!.length + index
+        })
+      }
+      if (input.conversationOrder) {
+        const order = new Map(input.conversationOrder.map((id, index) => [id, index]))
+        state.conversations.forEach((conversation, index) => {
+          conversation.manualOrder = order.get(conversation.id) ?? input.conversationOrder!.length + index
+        })
+      }
       return state
     })
   }
@@ -384,6 +495,9 @@ export class WorkspaceRepository {
       state.runs = state.runs.filter((item) => item.projectId !== projectId)
       state.artifacts = state.artifacts.filter((item) => item.projectId !== projectId)
       delete state.outlines[projectId]
+      state.settings.sidebarExpandedProjectIds = (
+        state.settings.sidebarExpandedProjectIds ?? []
+      ).filter((id) => id !== projectId)
 
       if (state.settings.activeProjectId === projectId) {
         const fallback = state.projects.find((item) => item.origin !== 'demo') ?? state.projects[0]
@@ -619,7 +733,17 @@ export class WorkspaceRepository {
       }
       state.messages.push(message)
       conversation.messageIds.push(message.id)
-      conversation.updatedAt = now()
+      const timestamp = now()
+      if (
+        message.role === 'user' &&
+        conversation.messageIds.length === 1 &&
+        /^(新的研究任务|新对话(?:\s+\d+)?)$/.test(conversation.title)
+      ) {
+        conversation.title = message.content.trim().replace(/\s+/g, ' ').slice(0, 42) || conversation.title
+      }
+      conversation.updatedAt = timestamp
+      const project = state.projects.find((item) => item.id === message.projectId)
+      if (project) project.updatedAt = timestamp
       return message
     })
   }
