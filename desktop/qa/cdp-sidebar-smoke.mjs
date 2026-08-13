@@ -133,6 +133,14 @@ async function main() {
   await waitFor("Boolean(document.querySelector('.research-group[draggable=\"true\"]'))")
   await openOrganizeMenu()
   await capture(`${outputDir}/organize-manual.png`)
+  await evaluate(`document.querySelector('button[aria-label="整理侧边栏"]')?.click()`)
+  await waitFor("!document.querySelector('.sidebar-organize-menu')")
+  const manualProjectReorder = await dragSecondBeforeFirst('.research-group', '.research-folder-button', 'title')
+  const manualConversationReorder = await dragSecondBeforeFirst(
+    '.research-group.is-active .research-conversation',
+    null,
+    'title',
+  )
 
   const final = await evaluate('window.paperAgent.workspace.get()')
   const result = {
@@ -146,6 +154,8 @@ async function main() {
     projectAndListModes: true,
     sortModes: ['priority', 'recent', 'manual'],
     manualRowsDraggable: true,
+    manualProjectReorder,
+    manualConversationReorder,
   }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
   } finally {
@@ -200,6 +210,35 @@ async function clickMenuText(text) {
     if (!(button instanceof HTMLElement)) throw new Error('菜单中找不到：${text}')
     button.click()
   })()`)
+}
+
+async function dragSecondBeforeFirst(selector, labelSelector, labelAttribute) {
+  const before = await evaluate(`(() => {
+    const rows = [...document.querySelectorAll(${JSON.stringify(selector)})]
+    return rows.map((row) => {
+      const label = ${labelSelector ? `row.querySelector(${JSON.stringify(labelSelector)})` : 'row'}
+      return label?.getAttribute(${JSON.stringify(labelAttribute)}) ?? label?.textContent?.trim() ?? ''
+    })
+  })()`)
+  if (before.length < 2) return false
+  await evaluate(`(() => {
+    const rows = [...document.querySelectorAll(${JSON.stringify(selector)})]
+    const transfer = new DataTransfer()
+    rows[1].dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: transfer }))
+  })()`)
+  await new Promise((resolve) => setTimeout(resolve, 160))
+  await evaluate(`(() => {
+    const rows = [...document.querySelectorAll(${JSON.stringify(selector)})]
+    const transfer = new DataTransfer()
+    rows[0].dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: transfer }))
+    rows[0].dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }))
+  })()`)
+  await waitFor(`(() => {
+    const row = document.querySelector(${JSON.stringify(selector)})
+    const label = ${labelSelector ? `row?.querySelector(${JSON.stringify(labelSelector)})` : 'row'}
+    return (label?.getAttribute(${JSON.stringify(labelAttribute)}) ?? label?.textContent?.trim() ?? '') === ${JSON.stringify(before[1])}
+  })()`)
+  return true
 }
 
 async function waitFor(predicate, timeout = 8_000) {
