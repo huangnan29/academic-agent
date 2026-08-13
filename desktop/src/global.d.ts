@@ -15,6 +15,8 @@ import type {
   ProviderInput,
   ProviderProfile,
   SectionGenerateInput,
+  SkillDefinition,
+  SkillInput,
   WorkspaceState,
 } from '../shared/contracts'
 
@@ -30,6 +32,7 @@ declare global {
         setActive(projectId: string): Promise<WorkspaceState>
         delete(projectId: string): Promise<WorkspaceState>
         chooseFolder(): Promise<WorkspaceState>
+        revealFolder(projectId: string): Promise<void>
       }
       provider: {
         save(input: ProviderInput): Promise<ProviderProfile>
@@ -60,6 +63,10 @@ declare global {
         test(serverId: string): Promise<McpServerConfig>
         callTool(serverId: string, name: string, args: Record<string, unknown>): Promise<McpToolCallResult>
         readResource(serverId: string, uri: string): Promise<McpResourceReadResult>
+      }
+      skill: {
+        save(input: SkillInput): Promise<SkillDefinition>
+        delete(skillId: string): Promise<void>
       }
       export: {
         project(projectId: string, format: ExportFormat): Promise<Artifact | null>

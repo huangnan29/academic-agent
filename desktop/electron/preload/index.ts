@@ -11,6 +11,7 @@ import type {
   ProviderInput,
   ResearchBrief,
   SectionGenerateInput,
+  SkillInput,
 } from '../../shared/contracts'
 
 const api = {
@@ -24,6 +25,7 @@ const api = {
     setActive: (projectId: string) => ipcRenderer.invoke(IPC.projectSetActive, projectId),
     delete: (projectId: string) => ipcRenderer.invoke(IPC.projectDelete, projectId),
     chooseFolder: () => ipcRenderer.invoke(IPC.projectChooseFolder),
+    revealFolder: (projectId: string) => ipcRenderer.invoke(IPC.projectRevealFolder, projectId),
   },
   provider: {
     save: (input: ProviderInput) => ipcRenderer.invoke(IPC.providerSave, input),
@@ -63,6 +65,10 @@ const api = {
       ipcRenderer.invoke(IPC.mcpCallTool, serverId, name, args),
     readResource: (serverId: string, uri: string) =>
       ipcRenderer.invoke(IPC.mcpReadResource, serverId, uri),
+  },
+  skill: {
+    save: (input: SkillInput) => ipcRenderer.invoke(IPC.skillSave, input),
+    delete: (skillId: string) => ipcRenderer.invoke(IPC.skillDelete, skillId),
   },
   export: {
     project: (projectId: string, format: ExportFormat) =>

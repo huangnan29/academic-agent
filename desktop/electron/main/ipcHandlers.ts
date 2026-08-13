@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import type {
@@ -27,6 +27,7 @@ import {
   providerInputSchema,
   researchBriefSchema,
   sectionGenerateSchema,
+  skillInputSchema,
 } from './schemas'
 import { isAllowedExternalUrl } from './window'
 
@@ -112,6 +113,35 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
       : await dialog.showOpenDialog(options)
     if (result.canceled || !result.filePaths[0]) return repository.snapshot()
     return repository.setResearchRootPath(result.filePaths[0])
+  })
+
+  handle(IPC.projectRevealFolder, async (_event, projectId: unknown) => {
+    assertId(projectId, '项目')
+    const project = repository.snapshot().projects.find((item) => item.id === projectId)
+    if (!project) throw new Error('项目不存在或已经被移除。')
+    let folderPath = project.researchFolderPath
+    if (!folderPath) {
+      const rootPath =
+        repository.snapshot().settings.researchRootPath ??
+        join(app.getPath('documents'), '学术 Agent')
+      folderPath = join(
+        rootPath,
+        `${safeResearchFolderName(project.title)}-${project.id.slice(0, 8)}`,
+      )
+      try {
+        await mkdir(folderPath, { recursive: true })
+        await repository.setProjectResearchFolder(project.id, folderPath)
+      } catch {
+        throw new Error('无法在默认位置建立研究文件夹，请先设置一个可写目录。')
+      }
+    }
+    try {
+      const metadata = await stat(folderPath)
+      if (!metadata.isDirectory()) throw new Error('研究文件夹路径不是目录。')
+    } catch {
+      throw new Error('研究文件夹已移动或当前无法访问。')
+    }
+    shell.showItemInFolder(folderPath)
   })
 
   handle(IPC.providerSave, async (_event, payload) => {
@@ -316,6 +346,15 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
       configuration.resolvedMcpServer(serverId),
       uri.trim(),
     )
+  })
+
+  handle(IPC.skillSave, async (_event, payload) => {
+    return repository.saveSkill(skillInputSchema.parse(payload))
+  })
+
+  handle(IPC.skillDelete, async (_event, skillId: unknown) => {
+    assertId(skillId, 'Skill')
+    await repository.deleteSkill(skillId)
   })
 
   handle(IPC.exportProject, async (event, projectId: unknown, format: unknown) => {

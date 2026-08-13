@@ -145,6 +145,7 @@ function legacyState(): WorkspaceState {
     citations: [],
     runs: [],
     mcpServers: [],
+    skills: [],
     artifacts: [],
     settings: { activeProjectId: projectId, demoMode: false },
   }

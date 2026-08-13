@@ -15,22 +15,36 @@ async function main() {
       (async () => {
         const workspace = await window.paperAgent?.workspace.get()
         if (!workspace) throw new Error('未找到桌面桥接接口')
-        const activeProjectId = workspace.settings.activeProjectId
+        const activeProjectId = workspace.projects.find((project) =>
+          workspace.sections.some(
+            (item) => item.projectId === project.id && item.derivedFromSectionId && item.level > 1 && item.content.trim()
+          )
+        )?.id ?? workspace.settings.activeProjectId
+        const targetProject = workspace.projects.find((item) => item.id === activeProjectId)
         const projectSections = workspace.sections.filter((item) => item.projectId === activeProjectId)
         const derived = projectSections.find(
           (item) => item.derivedFromSectionId && item.level > 1 && item.content.trim()
         )
         if (!derived) throw new Error('当前研究没有可验证的同步小节')
 
+        const projectButton = [...document.querySelectorAll('.research-folder-button')]
+          .find((item) => item.textContent?.trim() === targetProject?.title)
+        projectButton?.click()
+        await new Promise((resolve) => setTimeout(resolve, 400))
+
         const manuscriptTab = [...document.querySelectorAll('[role="tab"]')]
           .find((item) => item.textContent?.includes('稿件'))
         manuscriptTab?.click()
 
+        const expandAll = [...document.querySelectorAll('.academic-outline__toolbar button')]
+          .find((item) => item.textContent?.includes('展开'))
+        expandAll?.click()
+
         const deadline = Date.now() + 10000
         let outlineButton
         while (Date.now() < deadline) {
-          outlineButton = [...document.querySelectorAll('.outline-row')]
-            .find((item) => item.textContent?.includes(derived.title))
+          outlineButton = [...document.querySelectorAll('.academic-outline__select')]
+            .find((item) => item.textContent?.replace(/\s+/g, '').includes(derived.title.replace(/\s+/g, '')))
           if (outlineButton) break
           await new Promise((resolve) => setTimeout(resolve, 100))
         }
@@ -49,7 +63,7 @@ async function main() {
           title: derived.title,
           derivedFromSectionId: derived.derivedFromSectionId,
           contentLength: derived.content.length,
-          selected: outlineButton.getAttribute('aria-current') === 'true',
+          selected: outlineButton.closest('[role="treeitem"]')?.getAttribute('aria-selected') === 'true',
           showsEmptyState: paperText.includes('本章尚未生成'),
           renderedTextLength: paperText.length,
         }

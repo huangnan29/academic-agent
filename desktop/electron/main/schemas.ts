@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { OutlineNode } from '../../shared/contracts'
+import { SKILL_LIMITS, type OutlineNode } from '../../shared/contracts'
 
 const httpUrl = z.string().url().refine((value) => {
   const protocol = new URL(value).protocol
@@ -63,6 +63,19 @@ export const mcpServerInputSchema = z.object({
   transport: z.discriminatedUnion('type', [stdioTransportSchema, httpTransportSchema]),
   enabled: z.boolean(),
 })
+
+const skillTextSchema = (minChars: number, maxChars: number) =>
+  z.string().trim().min(minChars).max(maxChars)
+    .refine((value) => !value.includes('\u0000'), '文本包含无效字符。')
+
+/** Skill 仅接受文本字段，不允许携带路径、命令或其他运行配置。 */
+export const skillInputSchema = z.object({
+  id: z.string().uuid().optional(),
+  name: skillTextSchema(1, SKILL_LIMITS.name),
+  description: skillTextSchema(0, SKILL_LIMITS.description),
+  instructions: skillTextSchema(1, SKILL_LIMITS.instructions),
+  enabled: z.boolean(),
+}).strict()
 
 export const chatStartSchema = z.object({
   projectId: z.string().min(1),

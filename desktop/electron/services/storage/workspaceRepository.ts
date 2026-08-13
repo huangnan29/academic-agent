@@ -14,6 +14,8 @@ import type {
   Project,
   ProviderProfile,
   ResearchBrief,
+  SkillDefinition,
+  SkillInput,
   WorkspaceState,
 } from '../../../shared/contracts'
 import {
@@ -195,6 +197,7 @@ function demoState(): WorkspaceState {
     citations: [],
     runs: [],
     mcpServers: [],
+    skills: [],
     artifacts: [],
     settings: {
       activeProjectId: projectId,
@@ -219,6 +222,7 @@ function normalizeState(candidate: Partial<WorkspaceState>): WorkspaceState {
     citations: candidate.citations ?? [],
     runs: candidate.runs ?? [],
     mcpServers: candidate.mcpServers ?? [],
+    skills: Array.isArray(candidate.skills) ? candidate.skills : [],
     artifacts: candidate.artifacts ?? [],
     settings: {
       ...base.settings,
@@ -686,6 +690,41 @@ export class WorkspaceRepository {
   getMcpServer(serverId: string): McpServerConfig | undefined {
     const server = this.state.mcpServers.find((item) => item.id === serverId)
     return server ? structuredClone(server) : undefined
+  }
+
+  async saveSkill(input: SkillInput): Promise<SkillDefinition> {
+    return this.mutate((state) => {
+      const timestamp = now()
+      const existing = input.id
+        ? state.skills.find((item) => item.id === input.id)
+        : undefined
+      if (input.id && !existing) throw new Error('Skill 不存在或已经被移除。')
+
+      const skill: SkillDefinition = {
+        id: existing?.id ?? randomUUID(),
+        name: input.name.trim(),
+        description: input.description.trim(),
+        instructions: input.instructions.trim(),
+        enabled: input.enabled,
+        origin: 'live',
+        verificationStatus: 'unverified',
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+      }
+      const index = state.skills.findIndex((item) => item.id === skill.id)
+      if (index >= 0) state.skills[index] = skill
+      else state.skills.push(skill)
+      return skill
+    })
+  }
+
+  async deleteSkill(skillId: string): Promise<void> {
+    await this.mutate((state) => {
+      if (!state.skills.some((item) => item.id === skillId)) {
+        throw new Error('Skill 不存在或已经被移除。')
+      }
+      state.skills = state.skills.filter((item) => item.id !== skillId)
+    })
   }
 
   async saveArtifact(artifact: Artifact): Promise<Artifact> {

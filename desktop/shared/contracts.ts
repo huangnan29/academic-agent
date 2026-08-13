@@ -91,6 +91,34 @@ export interface ProviderInput {
   enabled: boolean
 }
 
+/** 应用内 Skill 的字段上限，原生端与演示后备层共用。 */
+export const SKILL_LIMITS = {
+  name: 80,
+  description: 1_000,
+  instructions: 20_000,
+  prompt: 24_000,
+  enabledCount: 32,
+} as const
+
+/**
+ * 仅保存在本应用工作区中的用户指令。
+ * Skill 不包含文件路径、启动命令或系统目录，因此不会读取系统 Skill。
+ */
+export interface SkillDefinition extends BaseEntity {
+  name: string
+  description: string
+  instructions: string
+  enabled: boolean
+}
+
+export interface SkillInput {
+  id?: string
+  name: string
+  description: string
+  instructions: string
+  enabled: boolean
+}
+
 export interface LiteratureRecord extends BaseEntity {
   projectId?: string
   title: string
@@ -235,6 +263,7 @@ export interface WorkspaceState {
   citations: CitationEvidence[]
   runs: AgentRun[]
   mcpServers: McpServerConfig[]
+  skills: SkillDefinition[]
   artifacts: Artifact[]
   settings: {
     activeProjectId?: string

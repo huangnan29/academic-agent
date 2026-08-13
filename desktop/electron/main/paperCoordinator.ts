@@ -46,7 +46,7 @@ export class PaperCoordinator {
       ['生成三级大纲', `正在使用 ${profile.name} / ${input.model}`, 'running'],
     ])
     await this.repository.saveRun(run)
-    const prompt = buildOutlinePrompt(project.brief, literature)
+    const prompt = buildOutlinePrompt(project.brief, literature, state.skills)
 
     try {
       let raw = ''

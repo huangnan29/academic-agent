@@ -4,7 +4,6 @@ import {
   Bot,
   Check,
   ChevronDown,
-  ChevronRight,
   CircleAlert,
   CircleCheck,
   CircleDot,
@@ -12,7 +11,6 @@ import {
   Database,
   Download,
   ExternalLink,
-  FileCheck2,
   FilePenLine,
   FileText,
   Files,
@@ -38,6 +36,7 @@ import {
   Send,
   Settings,
   ShieldCheck,
+  Sparkles,
   Square,
   Trash2,
   X,
@@ -56,11 +55,15 @@ import type {
   ProviderProtocol,
   ProviderProfile,
   ResearchBrief,
+  SkillDefinition,
+  SkillInput,
   WorkspaceState,
 } from '../shared/contracts'
+import { SKILL_LIMITS } from '../shared/contracts'
 import { isNativeBridge, paperAgent } from './fallback'
+import { OutlineTree } from './OutlineTree'
 
-type Route = 'workspace' | 'library' | 'settings'
+type Route = 'workspace' | 'library' | 'skills' | 'settings'
 type CenterMode = 'chat' | 'manuscript'
 type RightTab = 'literature' | 'drafts' | 'process'
 type SettingsTab = 'providers' | 'mcp' | 'local'
@@ -97,6 +100,7 @@ const emptyWorkspace: WorkspaceState = {
   citations: [],
   runs: [],
   mcpServers: [],
+  skills: [],
   artifacts: [],
   settings: { demoMode: false },
 }
@@ -213,6 +217,7 @@ function Sidebar({
   onCreate,
   onChooseFolder,
   onDeleteProject,
+  onRevealProject,
   choosingFolder,
 }: {
   workspace: WorkspaceState
@@ -225,13 +230,28 @@ function Sidebar({
   onCreate: () => void
   onChooseFolder: () => void
   onDeleteProject: (projectId: string) => void
+  onRevealProject: (projectId: string) => void
   choosingFolder: boolean
 }) {
-  const activeConversations = workspace.conversations.filter((item) => item.projectId === activeProjectId)
   const [openProjectMenuId, setOpenProjectMenuId] = useState<string>()
+  const projectMenuRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const projectMenuTriggerRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const researchFolderLabel = workspace.settings.researchRootPath
     ? `设置默认研究文件夹。当前目录：${workspace.settings.researchRootPath}。后续新建研究将保存到该目录`
     : '设置默认研究文件夹。未设置时使用“文稿/学术 Agent”，后续新建研究将保存到该目录'
+
+  useEffect(() => {
+    if (!openProjectMenuId) return
+    projectMenuRefs.current[openProjectMenuId]?.querySelector<HTMLButtonElement>('button')?.focus()
+    const closeMenu = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      const trigger = projectMenuTriggerRefs.current[openProjectMenuId]
+      setOpenProjectMenuId(undefined)
+      trigger?.focus()
+    }
+    document.addEventListener('keydown', closeMenu)
+    return () => document.removeEventListener('keydown', closeMenu)
+  }, [openProjectMenuId])
 
   return (
     <aside className={`sidebar${collapsed ? ' is-collapsed' : ''}`}>
@@ -252,6 +272,10 @@ function Sidebar({
         </button>
 
         <nav className="primary-nav" aria-label="主导航">
+          <button type="button" className={route === 'skills' ? 'is-active' : ''} onClick={() => onRoute('skills')} title="Skills">
+            <Sparkles size={17} aria-hidden="true" />
+            {!collapsed && <span>Skills</span>}
+          </button>
           <button type="button" className={route === 'library' ? 'is-active' : ''} onClick={() => onRoute('library')} title="文献库">
             <Library size={17} aria-hidden="true" />
             {!collapsed && <span>文献库</span>}
@@ -266,7 +290,7 @@ function Sidebar({
           <>
             <section className="sidebar-section">
               <div className="sidebar-section-title">
-                <span>研究项目</span>
+                <span>研究</span>
                 <button
                   type="button"
                   aria-label={researchFolderLabel}
@@ -278,50 +302,86 @@ function Sidebar({
                   {choosingFolder ? <LoaderCircle size={14} className="spin" /> : <FolderOpen size={14} />}
                 </button>
               </div>
-              <div className="project-list">
+              <div className="research-tree">
                 {workspace.projects.length === 0 ? (
-                  <p className="sidebar-empty">尚未创建项目</p>
+                  <p className="sidebar-empty">尚未创建研究</p>
                 ) : (
                   workspace.projects.map((project) => {
                     const menuOpen = openProjectMenuId === project.id
-                    const selected = project.id === activeProjectId && route === 'workspace'
+                    const active = project.id === activeProjectId
+                    const selected = active && route === 'workspace'
+                    const activeConversation = workspace.conversations.find(
+                      (conversation) =>
+                        conversation.projectId === project.id &&
+                        conversation.id === project.activeConversationId,
+                    )
                     return (
                       <div
                         key={project.id}
-                        className={`project-list-item${selected ? ' is-active' : ''}${menuOpen ? ' is-menu-open' : ''}`}
+                        className={`research-group${active ? ' is-active' : ''}${selected ? ' is-current' : ''}${menuOpen ? ' is-menu-open' : ''}`}
                         onBlur={(event) => {
                           if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
                             setOpenProjectMenuId(undefined)
                           }
                         }}
                       >
-                        <button
-                          type="button"
-                          className="project-list-main"
-                          onClick={() => {
-                            setOpenProjectMenuId(undefined)
-                            onProject(project.id)
-                          }}
-                          title={project.title}
-                          aria-current={selected ? 'page' : undefined}
-                        >
-                          <Folder size={15} aria-hidden="true" />
-                          <span>{project.title}</span>
-                        </button>
-                        <button
-                          type="button"
-                          className="project-list-more"
-                          aria-label={`管理项目：${project.title}`}
-                          title="项目操作"
-                          aria-haspopup="menu"
-                          aria-expanded={menuOpen}
-                          aria-controls={menuOpen ? `project-menu-${project.id}` : undefined}
-                          onClick={() => setOpenProjectMenuId(menuOpen ? undefined : project.id)}
-                        >
-                          <MoreHorizontal size={15} aria-hidden="true" />
-                        </button>
+                        <div className="research-group-header">
+                          <button
+                            type="button"
+                            className="research-folder-button"
+                            onClick={() => {
+                              setOpenProjectMenuId(undefined)
+                              onProject(project.id)
+                            }}
+                            title={project.title}
+                            aria-expanded={active}
+                            aria-controls={active ? `research-conversations-${project.id}` : undefined}
+                          >
+                            {active ? <FolderOpen size={16} aria-hidden="true" /> : <Folder size={16} aria-hidden="true" />}
+                            <span>{project.title}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="project-list-more"
+                            ref={(element) => { projectMenuTriggerRefs.current[project.id] = element }}
+                            aria-label={`管理研究：${project.title}`}
+                            title="研究操作"
+                            aria-haspopup="menu"
+                            aria-expanded={menuOpen}
+                            aria-controls={menuOpen ? `project-menu-${project.id}` : undefined}
+                            onClick={() => setOpenProjectMenuId(menuOpen ? undefined : project.id)}
+                          >
+                            <MoreHorizontal size={15} aria-hidden="true" />
+                          </button>
+                        </div>
                         {menuOpen && (
-                          <div id={`project-menu-${project.id}`} className="project-list-menu" role="menu" aria-label={`${project.title}的项目操作`}>
+                          <div
+                            id={`project-menu-${project.id}`}
+                            className="project-list-menu"
+                            role="menu"
+                            aria-label={`${project.title}的研究操作`}
+                            ref={(element) => { projectMenuRefs.current[project.id] = element }}
+                            onKeyDown={(event) => {
+                              if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return
+                              event.preventDefault()
+                              const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+                              const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement)
+                              const direction = event.key === 'ArrowDown' ? 1 : -1
+                              const nextIndex = (currentIndex + direction + buttons.length) % buttons.length
+                              buttons[nextIndex]?.focus()
+                            }}
+                          >
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => {
+                                setOpenProjectMenuId(undefined)
+                                onRevealProject(project.id)
+                              }}
+                            >
+                              <FolderOpen size={14} aria-hidden="true" />
+                              在 Finder 中显示
+                            </button>
                             <button
                               type="button"
                               role="menuitem"
@@ -331,36 +391,46 @@ function Sidebar({
                               }}
                             >
                               <Trash2 size={14} aria-hidden="true" />
-                              删除项目
+                              删除研究
                             </button>
+                          </div>
+                        )}
+                        {active && (
+                          <div
+                            id={`research-conversations-${project.id}`}
+                            className="research-conversations"
+                            aria-label={`${project.title}的对话`}
+                          >
+                            {!activeConversation ? (
+                              <span className="research-conversation-empty">尚无对话</span>
+                            ) : (
+                              <button
+                                type="button"
+                                className={`research-conversation${selected ? ' is-active' : ''}`}
+                                onClick={() => onProject(project.id)}
+                                title={
+                                  ['新的研究任务', project.title].includes(activeConversation.title)
+                                    ? '研究对话'
+                                    : activeConversation.title
+                                }
+                                aria-current={selected ? 'page' : undefined}
+                              >
+                                <span>
+                                  {['新的研究任务', project.title].includes(activeConversation.title)
+                                    ? '研究对话'
+                                    : activeConversation.title}
+                                </span>
+                                <small aria-label={`${activeConversation.messageIds.length} 条消息`}>
+                                  {activeConversation.messageIds.length || ''}
+                                </small>
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
                     )
                   })
                 )}
-              </div>
-            </section>
-
-            <section className="sidebar-section conversation-section">
-              <div className="sidebar-section-title">
-                <span>对话</span>
-                <MessageSquareText size={13} aria-hidden="true" />
-              </div>
-              <div className="sidebar-list">
-                {activeConversations.map((conversation) => (
-                  <button
-                    type="button"
-                    key={conversation.id}
-                    className={conversation.id === workspace.projects.find((item) => item.id === activeProjectId)?.activeConversationId ? 'is-active' : ''}
-                    onClick={() => onRoute('workspace')}
-                    title={conversation.title}
-                  >
-                    <MessageSquareText size={14} aria-hidden="true" />
-                    <span>{conversation.title}</span>
-                    <small>{conversation.messageIds.length}</small>
-                  </button>
-                ))}
               </div>
             </section>
           </>
@@ -773,12 +843,6 @@ function LiteratureList({
   )
 }
 
-const outlineLevelLabels: Record<1 | 2 | 3, string> = {
-  1: '一级章节',
-  2: '二级小节',
-  3: '三级条目',
-}
-
 const sectionStatusLabels: Record<ManuscriptSection['status'], string> = {
   pending: '待生成',
   generating: '生成中',
@@ -809,109 +873,6 @@ function summarizeOutline(nodes: OutlineNode[]) {
   }
   visit(nodes, 1)
   return summary
-}
-
-function indexSectionsByOutlineNode(sections: ManuscriptSection[], selectedSectionId?: string) {
-  const result = new Map<string, ManuscriptSection>()
-  sections.forEach((section) => {
-    if (!section.outlineNodeId) return
-    const current = result.get(section.outlineNodeId)
-    if (!current || section.id === selectedSectionId) {
-      result.set(section.outlineNodeId, section)
-      return
-    }
-    if (current.id === selectedSectionId) return
-    if (
-      section.version > current.version ||
-      (section.version === current.version && section.updatedAt > current.updatedAt)
-    ) {
-      result.set(section.outlineNodeId, section)
-    }
-  })
-  return result
-}
-
-function OutlineStatusIcon({ section }: { section?: ManuscriptSection }) {
-  if (section?.status === 'verified') return <FileCheck2 size={15} aria-hidden="true" />
-  if (section?.status === 'generating') return <LoaderCircle size={15} className="spin" aria-hidden="true" />
-  if (section?.status === 'error') return <CircleAlert size={15} aria-hidden="true" />
-  return <FileText size={15} aria-hidden="true" />
-}
-
-function OutlineTreeNodes({
-  nodes,
-  depth,
-  path,
-  sectionByNodeId,
-  selectedSectionId,
-  onSelectSection,
-}: {
-  nodes: OutlineNode[]
-  depth: number
-  path: string
-  sectionByNodeId: Map<string, ManuscriptSection>
-  selectedSectionId?: string
-  onSelectSection: (section: ManuscriptSection) => void
-}) {
-  return (
-    <>
-      {nodes.map((node, index) => {
-        const level = normalizeOutlineLevel(node, depth)
-        const section = sectionByNodeId.get(node.id)
-        const title = node.title?.trim() || '未命名大纲节点'
-        const statusLabel = section ? sectionStatusLabel(section) : '尚未创建文稿'
-        const targetWords = Number.isFinite(node.targetWords) && node.targetWords > 0
-          ? `${node.targetWords.toLocaleString('zh-CN')} 字目标`
-          : '未设置目标篇幅'
-        const progressLabel = section?.wordCount
-          ? `${section.wordCount.toLocaleString('zh-CN')} 字 · 第 ${Math.max(1, section.version)} 版`
-          : targetWords
-        const children = Array.isArray(node.children) ? node.children : []
-        const nodePath = `${path}-${node.id || index}`
-        const selected = section?.id === selectedSectionId
-
-        return (
-          <li className={`outline-tree-node is-level-${level}`} key={nodePath}>
-            <button
-              type="button"
-              className={`outline-row is-level-${level}${selected ? ' is-active' : ''}`}
-              onClick={() => section && onSelectSection(section)}
-              disabled={!section}
-              aria-current={selected ? 'true' : undefined}
-              aria-label={`${outlineLevelLabels[level]}：${title}，${statusLabel}，${progressLabel}`}
-              title={section ? title : `${title}（该节点尚未创建对应文稿）`}
-            >
-              <span className={`outline-state state-${section?.status ?? 'unavailable'}`}>
-                <OutlineStatusIcon section={section} />
-              </span>
-              <span className="outline-copy">
-                <strong>{title}</strong>
-                <small>
-                  <span className="outline-level-label">{outlineLevelLabels[level]}</span>
-                  <span>{statusLabel} · {progressLabel}</span>
-                </small>
-              </span>
-              <span className="outline-row-action" aria-hidden="true">
-                {section ? <ChevronRight size={15} /> : <span>—</span>}
-              </span>
-            </button>
-            {children.length > 0 && (
-              <ol className="outline-tree-children">
-                <OutlineTreeNodes
-                  nodes={children}
-                  depth={depth + 1}
-                  path={nodePath}
-                  sectionByNodeId={sectionByNodeId}
-                  selectedSectionId={selectedSectionId}
-                  onSelectSection={onSelectSection}
-                />
-              </ol>
-            )}
-          </li>
-        )
-      })}
-    </>
-  )
 }
 
 function RightWorkspace({
@@ -957,7 +918,6 @@ function RightWorkspace({
 }) {
   const outlineNodes = outline ?? []
   const outlineSummary = summarizeOutline(outlineNodes)
-  const sectionByNodeId = indexSectionsByOutlineNode(sections, selectedSectionId)
 
   return (
     <aside className="right-workspace">
@@ -1061,16 +1021,12 @@ function RightWorkspace({
               />
             )}
             {outlineNodes.length > 0 && (
-              <ol className="outline-tree" aria-label="论文三级大纲">
-                <OutlineTreeNodes
-                  nodes={outlineNodes}
-                  depth={1}
-                  path="outline"
-                  sectionByNodeId={sectionByNodeId}
-                  selectedSectionId={selectedSectionId}
-                  onSelectSection={onSelectSection}
-                />
-              </ol>
+              <OutlineTree
+                nodes={outlineNodes}
+                sections={sections}
+                selectedSectionId={selectedSectionId}
+                onSelectSection={onSelectSection}
+              />
             )}
             <div className="panel-section-heading artifacts-heading">
               <strong>导出产物</strong>
@@ -1987,7 +1943,7 @@ function McpSettings({
           )}
           <div className="credential-note">
             <ShieldCheck size={15} />
-            <span>敏感环境变量和请求头由安装版写入系统安全存储；再次编辑时仅回显掩码值。</span>
+            <span>敏感环境变量和请求头由安装版写入系统安全存储；再次编辑时仅回显掩码值。这里的服务只属于学术 Agent，不读取系统或其他应用的 MCP 配置。</span>
           </div>
           <label className="switch-row"><input type="checkbox" checked={form.enabled} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} /><span><strong>启用此服务</strong><small>Agent 只会调用已启用且连接正常的服务</small></span></label>
           {selected && (selected.tools.length > 0 || selected.resources.length > 0) && (
@@ -2117,6 +2073,223 @@ function SettingsPage({
           <div className="local-setting-row"><span className="settings-row-icon"><FolderOpen size={17} /></span><div><strong>项目数据</strong><p>{workspace.projects.length} 个项目 · {workspace.literature.length} 条文献记录 · {workspace.artifacts.length} 个导出产物</p></div></div>
         </div>
       )}
+    </section>
+  )
+}
+
+function emptySkillInput(): SkillInput {
+  return {
+    name: '',
+    description: '',
+    instructions: '',
+    enabled: true,
+  }
+}
+
+function SkillsPage({
+  skills,
+  onRefresh,
+  onToast,
+}: {
+  skills: SkillDefinition[]
+  onRefresh: () => Promise<void>
+  onToast: (message: string, tone?: 'success' | 'error') => void
+}) {
+  const [selectedId, setSelectedId] = useState<string>('new')
+  const [form, setForm] = useState<SkillInput>(emptySkillInput)
+  const [busy, setBusy] = useState<'save' | 'delete'>()
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const selected = skills.find((skill) => skill.id === selectedId)
+  const enabledCount = skills.filter((skill) => skill.enabled).length
+
+  useEffect(() => {
+    if (!selected) {
+      if (selectedId !== 'new' && skills.length > 0) {
+        setSelectedId(skills[0].id)
+      } else if (selectedId === 'new' && skills.length === 0) {
+        setSelectedId('new')
+        setForm(emptySkillInput())
+      }
+      return
+    }
+    setForm({
+      id: selected.id,
+      name: selected.name,
+      description: selected.description,
+      instructions: selected.instructions,
+      enabled: selected.enabled,
+    })
+  }, [selectedId, selected, skills])
+
+  const startNew = () => {
+    setSelectedId('new')
+    setForm(emptySkillInput())
+    setDeleteConfirmOpen(false)
+  }
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!form.name.trim() || !form.instructions.trim()) {
+      onToast('请填写 Skill 名称和指令', 'error')
+      return
+    }
+    setBusy('save')
+    try {
+      const saved = await paperAgent.skill.save({
+        ...form,
+        name: form.name.trim(),
+        description: form.description.trim(),
+        instructions: form.instructions.trim(),
+      })
+      setSelectedId(saved.id)
+      await onRefresh()
+      onToast(form.id ? 'Skill 已更新' : 'Skill 已添加')
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : '保存 Skill 失败', 'error')
+    } finally {
+      setBusy(undefined)
+    }
+  }
+
+  const remove = async () => {
+    if (!selected) return
+    setBusy('delete')
+    try {
+      await paperAgent.skill.delete(selected.id)
+      const nextSkill = skills.find((skill) => skill.id !== selected.id)
+      setSelectedId(nextSkill?.id ?? 'new')
+      if (!nextSkill) setForm(emptySkillInput())
+      await onRefresh()
+      setDeleteConfirmOpen(false)
+      onToast('Skill 已删除')
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : '删除 Skill 失败', 'error')
+    } finally {
+      setBusy(undefined)
+    }
+  }
+
+  return (
+    <section className="route-page skills-page">
+      <header className="route-header skills-route-header">
+        <div>
+          <span className="route-kicker">应用内能力</span>
+          <h1>Skills</h1>
+          <p>把固定的研究方法、写作规范和输出偏好保存为可复用指令；启用后用于新的提纲、章节和对话请求。</p>
+        </div>
+        <span className="skills-count">{enabledCount} 个启用 · {skills.length} 个已添加</span>
+      </header>
+
+      <div className="settings-workbench skills-workbench">
+        <aside className="settings-list skills-list" aria-label="应用内 Skills">
+          <div className="settings-list-head">
+            <strong>我的 Skills</strong>
+            <IconButton icon={Plus} label="添加 Skill" onClick={startNew} />
+          </div>
+          {skills.length === 0 ? (
+            <button type="button" className="skills-empty-list" onClick={startNew}>
+              <Sparkles size={18} aria-hidden="true" />
+              <span><strong>尚未添加 Skill</strong><small>从右侧创建第一条应用内指令</small></span>
+            </button>
+          ) : (
+            skills.map((skill) => (
+              <button
+                type="button"
+                className={`settings-row${selectedId === skill.id ? ' is-active' : ''}`}
+                key={skill.id}
+                onClick={() => {
+                  setSelectedId(skill.id)
+                  setDeleteConfirmOpen(false)
+                }}
+                aria-pressed={selectedId === skill.id}
+              >
+                <span className="settings-row-icon"><Sparkles size={16} aria-hidden="true" /></span>
+                <span><strong>{skill.name}</strong><small>{skill.description || '未填写说明'}</small></span>
+                <span className={`skill-enabled-state${skill.enabled ? ' is-enabled' : ''}`} aria-label={skill.enabled ? '已启用' : '未启用'}>
+                  <CircleDot size={10} aria-hidden="true" />
+                </span>
+              </button>
+            ))
+          )}
+        </aside>
+
+        <main className="settings-detail skills-detail">
+          <div className="settings-detail-head">
+            <div>
+              <h2>{selected ? `编辑 ${selected.name}` : '添加 Skill'}</h2>
+              <p>Skill 是纯文本指令。应用只会在你主动发起生成或对话时，把启用项加入当前请求上下文。</p>
+            </div>
+          </div>
+
+          <div className="skill-isolation-note" role="note">
+            <ShieldCheck size={17} aria-hidden="true" />
+            <span><strong>与系统配置完全隔离</strong><small>仅保存在学术 Agent 工作区，不读取 ~/.codex、系统 Skills、其他应用 Skills 或系统 MCP 配置。</small></span>
+          </div>
+
+          <form className="settings-form skills-form" onSubmit={submit}>
+            <label className="field">
+              <span>名称 <small>{form.name.length}/{SKILL_LIMITS.name}</small></span>
+              <input
+                value={form.name}
+                onChange={(event) => setForm({ ...form, name: event.target.value })}
+                maxLength={SKILL_LIMITS.name}
+                placeholder="例如：中文学术写作规范"
+                required
+              />
+            </label>
+            <label className="field">
+              <span>说明 <small>{form.description.length}/{SKILL_LIMITS.description}</small></span>
+              <input
+                value={form.description}
+                onChange={(event) => setForm({ ...form, description: event.target.value })}
+                maxLength={SKILL_LIMITS.description}
+                placeholder="说明这条 Skill 适合什么任务"
+              />
+            </label>
+            <label className="field skill-instructions-field">
+              <span>指令 <small>{form.instructions.length}/{SKILL_LIMITS.instructions}</small></span>
+              <textarea
+                value={form.instructions}
+                onChange={(event) => setForm({ ...form, instructions: event.target.value })}
+                maxLength={SKILL_LIMITS.instructions}
+                placeholder={'写下希望 Agent 持续遵循的研究或写作规则。\n例如：章节先说明研究问题，再组织可核验文献证据；不把摘要信息表述为全文结论。'}
+                required
+              />
+            </label>
+            <label className="switch-row">
+              <input
+                type="checkbox"
+                checked={form.enabled}
+                onChange={(event) => setForm({ ...form, enabled: event.target.checked })}
+              />
+              <span><strong>启用此 Skill</strong><small>关闭后仍保存在本机，但不会加入模型上下文</small></span>
+            </label>
+            <div className="settings-form-actions">
+              {selected ? (
+                deleteConfirmOpen ? (
+                  <span className="skill-delete-confirm" role="group" aria-label={`确认删除 ${selected.name}`}>
+                    <button type="button" className="secondary-button" onClick={() => setDeleteConfirmOpen(false)} disabled={Boolean(busy)}>取消</button>
+                    <button type="button" className="danger-button" onClick={remove} disabled={Boolean(busy)}>
+                      {busy === 'delete' ? <LoaderCircle size={15} className="spin" /> : <Trash2 size={15} />}
+                      确认删除
+                    </button>
+                  </span>
+                ) : (
+                  <button type="button" className="danger-button" onClick={() => setDeleteConfirmOpen(true)} disabled={Boolean(busy)}>
+                    <Trash2 size={15} /> 删除
+                  </button>
+                )
+              ) : <span />}
+              <span />
+              <button type="button" className="secondary-button" onClick={startNew} disabled={Boolean(busy)}>清空</button>
+              <button type="submit" className="primary-button compact" disabled={Boolean(busy)}>
+                {busy === 'save' ? <LoaderCircle size={15} className="spin" /> : <Save size={15} />}
+                {selected ? '保存修改' : '添加 Skill'}
+              </button>
+            </div>
+          </form>
+        </main>
+      </div>
     </section>
   )
 }
@@ -2274,6 +2447,14 @@ export function App() {
       showToast(error instanceof Error ? error.message : '选择研究文件夹失败', 'error')
     } finally {
       setChoosingFolder(false)
+    }
+  }
+
+  const revealResearchFolder = async (projectId: string) => {
+    try {
+      await paperAgent.project.revealFolder(projectId)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '无法在 Finder 中显示研究文件夹', 'error')
     }
   }
 
@@ -2488,6 +2669,7 @@ export function App() {
         onCreate={() => setNewProjectOpen(true)}
         onChooseFolder={chooseResearchFolder}
         onDeleteProject={setProjectPendingDeletionId}
+        onRevealProject={revealResearchFolder}
         choosingFolder={choosingFolder}
       />
 
@@ -2615,6 +2797,13 @@ export function App() {
             <div className="no-drag"><IconButton icon={PanelLeftClose} label="切换侧栏" onClick={() => setSidebarCollapsed((current) => !current)} /></div>
           </div>
           <LibraryPage workspace={workspace} activeProjectId={activeProject?.id} initialSelected={selectedLiterature} onRefresh={refreshWorkspace} onToast={showToast} />
+        </div>
+      )}
+
+      {route === 'skills' && (
+        <div className="full-route-column">
+          <div className="route-titlebar window-drag-region"><span>学术 Agent · Skills</span></div>
+          <SkillsPage skills={workspace.skills} onRefresh={refreshWorkspace} onToast={showToast} />
         </div>
       )}
 
