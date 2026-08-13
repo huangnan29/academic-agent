@@ -141,7 +141,7 @@
 - [x] 为旧工作区补入内置 arXiv MCP，同时保留用户对现有配置的修改与启用状态。
 - [x] 新增持续更新的 `DEVELOPMENT_LOG.md` 并写入 GitHub 提交维护规则。
 - [x] 完成类型检查、真实 arXiv MCP、原生视觉和生产构建验证。
-- [ ] 完成敏感信息检查、Git 提交、推送与 GitHub PR。
+- [x] 完成敏感信息检查、Git 提交、推送与 GitHub Draft PR #1。
 
 ## 首版已知边界
 

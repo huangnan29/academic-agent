@@ -73,6 +73,7 @@
 - 为 Finder 启动的桌面应用补入 Homebrew、`~/.local/bin` 与 `/usr/local/bin` 等常见可执行路径。
 - 上游项目采用 Apache-2.0 许可证，官方仓库为 [blazickjp/arxiv-mcp-server](https://github.com/blazickjp/arxiv-mcp-server)。
 - 本轮真实验收运行上游 0.6.2，发现 14 个工具，并通过 `search_papers` 返回 1 条真实 arXiv 结果；该版本号是验收记录，不代表运行配置被永久锁定。
+- 当前完整更新已提交到分支 `codex/arxiv-mcp-visual-polish`，并创建 GitHub Draft PR [#1](https://github.com/huangnan29/academic-agent/pull/1)；合并前继续以该 PR 承载复核与修订。
 
 ## 当前架构
 
