@@ -37,7 +37,9 @@ export function createExportDocumentModel(
   const outlineOrder = flattenOutline(outline)
   const orderById = new Map(outlineOrder.map((node, index) => [node.id, index]))
   const latestSections = selectLatestSections(
-    state.sections.filter((section) => section.projectId === projectId),
+    state.sections.filter(
+      (section) => section.projectId === projectId && !section.derivedFromSectionId,
+    ),
   ).sort((left, right) => {
     const leftOrder = orderById.get(left.outlineNodeId) ?? Number.MAX_SAFE_INTEGER
     const rightOrder = orderById.get(right.outlineNodeId) ?? Number.MAX_SAFE_INTEGER

@@ -10,6 +10,10 @@ import type {
   ProviderProfile,
   WorkspaceState,
 } from '../shared/contracts'
+import {
+  saveSectionContentInState,
+  synchronizeDerivedSections,
+} from '../shared/sectionContent'
 
 type PaperAgentApi = Window['paperAgent']
 
@@ -673,6 +677,7 @@ function readState(): WorkspaceState {
     const stored = window.localStorage.getItem(STORAGE_KEY)
     const parsed = stored ? (JSON.parse(stored) as WorkspaceState) : initialWorkspace()
     memoryState = migrateDefaultDemoOutline(parsed)
+    synchronizeDerivedSections(memoryState)
   } catch {
     memoryState = initialWorkspace()
   }
@@ -955,17 +960,12 @@ const fallbackApi: PaperAgentApi = {
             updatedAt: now(),
           })
         }
+        synchronizeDerivedSections(draft, input.projectId, now())
       })
     },
     async save(sectionId, content) {
       mutate((draft) => {
-        const section = draft.sections.find((item) => item.id === sectionId)
-        if (section) {
-          section.content = content
-          section.wordCount = content.replace(/\s/g, '').length
-          section.version += 1
-          section.updatedAt = now()
-        }
+        saveSectionContentInState(draft, sectionId, content, now())
       })
     },
     async setActive(sectionId) {

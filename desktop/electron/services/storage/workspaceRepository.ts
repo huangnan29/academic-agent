@@ -16,6 +16,10 @@ import type {
   ResearchBrief,
   WorkspaceState,
 } from '../../../shared/contracts'
+import {
+  saveSectionContentInState,
+  synchronizeDerivedSections,
+} from '../../../shared/sectionContent'
 
 const now = () => new Date().toISOString()
 
@@ -248,6 +252,8 @@ export class WorkspaceRepository {
       this.state = normalizeState(parsed)
       let changed = JSON.stringify(parsed) !== JSON.stringify(this.state)
       changed = synchronizeActiveModelSelection(this.state) || changed
+      // 兼容旧版本：父章节已经包含子标题时，只回填对应的空白子章节。
+      changed = synchronizeDerivedSections(this.state) || changed
       for (const run of this.state.runs) {
         if (run.status !== 'queued' && run.status !== 'running') continue
         run.status = 'cancelled'
@@ -551,6 +557,7 @@ export class WorkspaceRepository {
         state.sections.push(section)
         return section
       })
+      synchronizeDerivedSections(state, projectId, timestamp)
       return created
     })
   }
@@ -559,18 +566,15 @@ export class WorkspaceRepository {
     return this.mutate((state) => {
       const section = state.sections.find((item) => item.id === sectionId)
       if (!section) throw new Error('论文章节不存在。')
-      section.content = content
-      section.wordCount = content.replace(/\s/g, '').length
-      section.status = 'draft'
-      section.version += 1
-      section.updatedAt = now()
+      const timestamp = now()
+      const saved = saveSectionContentInState(state, sectionId, content, timestamp)
       const project = state.projects.find((item) => item.id === section.projectId)
       if (project) {
         project.status = 'writing'
         project.activeSectionId = section.id
-        project.updatedAt = now()
+        project.updatedAt = timestamp
       }
-      return section
+      return saved
     })
   }
 

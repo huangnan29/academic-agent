@@ -192,7 +192,8 @@ function chooseSections(
     const sectionId = targetSectionId ?? project.activeSectionId
     return sections.filter((section) => section.id === sectionId)
   }
-  return sections
+  // “全稿”上下文只读取主稿；同步小节的内容已经包含在对应父章节中。
+  return sections.filter((section) => !section.derivedFromSectionId)
 }
 
 function formatBrief(project: Project): string {

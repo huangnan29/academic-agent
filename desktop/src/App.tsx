@@ -515,7 +515,7 @@ function ManuscriptView({
         <div>
           <span>第 {section.version} 版</span>
           <span>{section.wordCount.toLocaleString('zh-CN')} 字</span>
-          <StatusBadge status={section.status}>{section.status === 'draft' ? '草稿' : section.status === 'verified' ? '已核验' : '待生成'}</StatusBadge>
+          <StatusBadge status={section.status}>{sectionStatusLabel(section)}</StatusBadge>
         </div>
         <div className="toolbar-actions">
           {section.status === 'pending' && (
@@ -787,6 +787,13 @@ const sectionStatusLabels: Record<ManuscriptSection['status'], string> = {
   error: '生成失败',
 }
 
+function sectionStatusLabel(section: ManuscriptSection): string {
+  if (section.derivedFromSectionId && ['draft', 'verified'].includes(section.status)) {
+    return section.status === 'verified' ? '随父章节同步 · 已核验' : '已随父章节生成'
+  }
+  return sectionStatusLabels[section.status]
+}
+
 function normalizeOutlineLevel(node: OutlineNode, depth: number): 1 | 2 | 3 {
   const level = Number(node.level) || depth
   return Math.min(3, Math.max(1, level)) as 1 | 2 | 3
@@ -852,7 +859,7 @@ function OutlineTreeNodes({
         const level = normalizeOutlineLevel(node, depth)
         const section = sectionByNodeId.get(node.id)
         const title = node.title?.trim() || '未命名大纲节点'
-        const statusLabel = section ? sectionStatusLabels[section.status] : '尚未创建文稿'
+        const statusLabel = section ? sectionStatusLabel(section) : '尚未创建文稿'
         const targetWords = Number.isFinite(node.targetWords) && node.targetWords > 0
           ? `${node.targetWords.toLocaleString('zh-CN')} 字目标`
           : '未设置目标篇幅'

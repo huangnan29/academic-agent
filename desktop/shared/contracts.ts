@@ -134,6 +134,13 @@ export interface ManuscriptSection extends BaseEntity {
   status: 'pending' | 'generating' | 'draft' | 'verified' | 'error'
   wordCount: number
   version: number
+  /**
+   * 当前小节从哪一条父章节正文中拆分得到。
+   * 父章节仍是完整主稿；带此字段的小节只是可单独查看和编辑的同步视图。
+   */
+  derivedFromSectionId?: string
+  /** 生成当前同步视图时对应的父章节版本，用于判断是否需要刷新。 */
+  derivedFromVersion?: number
 }
 
 export interface CitationEvidence extends BaseEntity {

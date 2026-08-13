@@ -153,7 +153,8 @@ export function runProjectQualityChecks(state: WorkspaceState, projectId: string
   const project = state.projects.find((item) => item.id === projectId)
   if (!project) throw new Error('找不到要检查的论文项目。')
   const content = state.sections
-    .filter((section) => section.projectId === projectId)
+    // 同步小节已经包含在父章节主稿中，不应再次计入篇幅和质量检查。
+    .filter((section) => section.projectId === projectId && !section.derivedFromSectionId)
     // 项目标题在导出稿中占用一级标题，章节从二级标题开始，和 Markdown 导出保持一致。
     .map((section) => `${'#'.repeat(section.level + 1)} ${section.title}\n\n${section.content}`)
     .join('\n\n')
