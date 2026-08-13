@@ -1,0 +1,107 @@
+import { z } from 'zod'
+import type { OutlineNode } from '../../shared/contracts'
+
+const httpUrl = z.string().url().refine((value) => {
+  const protocol = new URL(value).protocol
+  return protocol === 'http:' || protocol === 'https:'
+}, '只允许 HTTP 或 HTTPS 地址。')
+
+const secureServiceUrl = httpUrl.refine((value) => {
+  const url = new URL(value)
+  return url.protocol === 'https:' || isLoopbackHost(url.hostname)
+}, '远程服务必须使用 HTTPS；HTTP 只允许本机回环地址。')
+
+export const researchBriefSchema = z.object({
+  title: z.string().trim().min(2).max(200),
+  paperType: z.string().trim().min(1).max(80),
+  discipline: z.string().trim().min(1).max(80),
+  language: z.enum(['zh-CN', 'en']),
+  targetWords: z.number().int().min(1000).max(100000),
+  requirements: z.string().trim().max(5000),
+  keywords: z.array(z.string().trim().min(1).max(80)).max(20),
+})
+
+export const providerInputSchema = z.object({
+  id: z.string().uuid().optional(),
+  name: z.string().trim().min(1).max(80),
+  protocol: z.enum(['openai-compatible', 'anthropic']),
+  baseUrl: secureServiceUrl,
+  apiKey: z.string().trim().max(1000).optional(),
+  models: z.array(z.string().trim().min(1).max(200)).min(1).max(100),
+  defaultModel: z.string().trim().min(1).max(200),
+  enabled: z.boolean(),
+})
+
+export const literatureSearchSchema = z.object({
+  projectId: z.string().optional(),
+  query: z.string().trim().min(2).max(500),
+  limit: z.number().int().min(1).max(50).optional(),
+  mcp: z.object({
+    serverId: z.string().min(1).max(200),
+    toolName: z.string().trim().min(1).max(256),
+    queryArgument: z.string().trim().min(1).max(100).optional(),
+  }).optional(),
+})
+
+const stdioTransportSchema = z.object({
+  type: z.literal('stdio'),
+  command: z.string().trim().min(1).max(1000),
+  args: z.array(z.string().max(2000)).max(100),
+  cwd: z.string().trim().max(2000).optional(),
+  env: z.record(z.string().max(5000)).optional(),
+})
+
+const httpTransportSchema = z.object({
+  type: z.literal('streamable-http'),
+  url: secureServiceUrl,
+  headers: z.record(z.string().max(5000)).optional(),
+})
+
+export const mcpServerInputSchema = z.object({
+  id: z.string().uuid().optional(),
+  name: z.string().trim().min(1).max(100),
+  transport: z.discriminatedUnion('type', [stdioTransportSchema, httpTransportSchema]),
+  enabled: z.boolean(),
+})
+
+export const chatStartSchema = z.object({
+  projectId: z.string().min(1),
+  conversationId: z.string().min(1),
+  content: z.string().trim().min(1).max(100000),
+  providerId: z.string().min(1),
+  model: z.string().trim().min(1).max(200),
+  contextScope: z.enum(['project', 'manuscript', 'section', 'selection']),
+  selectedText: z.string().max(100000).optional(),
+})
+
+export const outlineGenerateSchema = z.object({
+  projectId: z.string().min(1),
+  providerId: z.string().min(1),
+  model: z.string().trim().min(1),
+})
+
+export const sectionGenerateSchema = z.object({
+  projectId: z.string().min(1),
+  sectionId: z.string().min(1),
+  providerId: z.string().min(1),
+  model: z.string().trim().min(1),
+})
+
+export const outlineNodeSchema: z.ZodType<OutlineNode> = z.lazy(() =>
+  z.object({
+    id: z.string().min(1).max(200),
+    title: z.string().trim().min(1).max(500),
+    level: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    objective: z.string().trim().max(3000),
+    targetWords: z.number().int().min(100).max(100000),
+    citationIds: z.array(z.string().min(1).max(200)).max(100),
+    children: z.array(outlineNodeSchema).max(100),
+  }),
+)
+
+export const outlineSchema = z.array(outlineNodeSchema).max(100)
+
+function isLoopbackHost(hostname: string): boolean {
+  const value = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
+  return value === 'localhost' || value.endsWith('.localhost') || value === '::1' || /^127(?:\.\d{1,3}){3}$/.test(value)
+}

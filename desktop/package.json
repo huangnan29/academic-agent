@@ -1,0 +1,89 @@
+{
+  "name": "aiwritepaper-agent",
+  "version": "0.2.0",
+  "description": "本机优先的 macOS 论文研究 Agent",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main/index.js",
+  "author": "学术 Agent Contributors",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "pack": "npm run build && electron-builder --mac dir --arm64 --publish never",
+    "dmg": "npm run build && electron-builder --mac dmg --arm64 --publish never",
+    "dist": "npm run dmg"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "docx": "9.5.1",
+    "lucide-react": "0.468.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.30",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@vitejs/plugin-react": "5.0.4",
+    "electron": "43.4.0",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "typescript": "5.9.3",
+    "vite": "6.4.2"
+  },
+  "build": {
+    "appId": "com.aiwritepaper.agent",
+    "productName": "学术 Agent",
+    "asar": true,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "artifactName": "Academic-Agent-${version}-${arch}.${ext}",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "identity": null
+    },
+    "dmg": {
+      "title": "学术 Agent ${version}",
+      "iconSize": 112,
+      "window": {
+        "width": 560,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 160,
+          "y": 190,
+          "type": "file"
+        },
+        {
+          "x": 400,
+          "y": 190,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
+  }
+}

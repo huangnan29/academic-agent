@@ -1,0 +1,31 @@
+# 桌面端依赖与构建产物
+desktop/node_modules/
+desktop/dist/
+desktop/dist-electron/
+desktop/release/
+desktop/*.log
+desktop/.vite/
+.npm-cache/
+desktop/.npm-cache/
+.playwright-mcp/
+output/
+
+# macOS 与编辑器临时文件
+.DS_Store
+*.swp
+*.tmp
+
+# 凭证与本机运行数据
+.env
+.env.*
+!.env.example
+credentials.json
+workspace.json
+
+# 签名、公证与私钥文件
+*.p12
+*.cer
+*.pem
+*.key
+*.mobileprovision
+*.provisionprofile
