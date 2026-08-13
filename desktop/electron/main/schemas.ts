@@ -27,6 +27,7 @@ export const sidebarPreferencesSchema = z.object({
   expandedProjectIds: z.array(z.string().min(1).max(200)).max(10_000).optional(),
   showArchived: z.boolean().optional(),
   sidebarWidth: z.number().int().min(240).max(520).optional(),
+  rightPanelWidth: z.number().int().min(320).max(620).optional(),
   projectOrder: z.array(z.string().min(1).max(200)).max(10_000).optional(),
   conversationOrder: z.array(z.string().min(1).max(200)).max(50_000).optional(),
 }).strict()
@@ -37,6 +38,9 @@ export const conversationUpdateSchema = z.object({
   pinned: z.boolean().optional(),
   archived: z.boolean().optional(),
   unread: z.boolean().optional(),
+  goal: z.string().trim().max(2000).optional(),
+  planMode: z.boolean().optional(),
+  accessMode: z.enum(['ask', 'full']).optional(),
 }).strict()
 
 export const providerInputSchema = z.object({

@@ -12,8 +12,10 @@ import type {
   ProviderInput,
   ResearchBrief,
   SectionGenerateInput,
+  SectionStreamEvent,
   SidebarPreferencesInput,
   SkillInput,
+  SystemPermissionKind,
 } from '../../shared/contracts'
 
 const api = {
@@ -43,6 +45,16 @@ const api = {
       ipcRenderer.invoke(IPC.conversationMove, conversationId, targetProjectId),
     copyId: (conversationId: string) =>
       ipcRenderer.invoke(IPC.conversationCopyId, conversationId),
+    chooseAttachments: (conversationId: string) =>
+      ipcRenderer.invoke(IPC.conversationChooseAttachments, conversationId),
+    removeAttachment: (attachmentId: string) =>
+      ipcRenderer.invoke(IPC.conversationRemoveAttachment, attachmentId),
+  },
+  systemPermissions: {
+    get: () => ipcRenderer.invoke(IPC.systemPermissionsGet),
+    requestFullAccess: () => ipcRenderer.invoke(IPC.systemPermissionsRequestFullAccess),
+    openSettings: (kind: SystemPermissionKind) =>
+      ipcRenderer.invoke(IPC.systemPermissionsOpenSettings, kind),
   },
   provider: {
     save: (input: ProviderInput) => ipcRenderer.invoke(IPC.providerSave, input),
@@ -64,6 +76,11 @@ const api = {
     save: (sectionId: string, content: string) =>
       ipcRenderer.invoke(IPC.sectionSave, sectionId, content),
     setActive: (sectionId: string) => ipcRenderer.invoke(IPC.sectionSetActive, sectionId),
+    onEvent: (listener: (event: SectionStreamEvent) => void) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, payload: SectionStreamEvent) => listener(payload)
+      ipcRenderer.on(IPC.sectionEvent, wrapped)
+      return () => ipcRenderer.removeListener(IPC.sectionEvent, wrapped)
+    },
   },
   chat: {
     start: (input: ChatStartInput) => ipcRenderer.invoke(IPC.chatStart, input),

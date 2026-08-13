@@ -1,12 +1,16 @@
 import { randomUUID } from 'node:crypto'
+import type { WebContents } from 'electron'
 import type {
   AgentRun,
   CitationEvidence,
+  ManuscriptSection,
   OutlineGenerateInput,
   OutlineNode,
   SectionGenerateInput,
+  SectionStreamEvent,
 } from '../../shared/contracts'
-import { createProviderAdapter } from '../services/providers'
+import { createProviderAdapter, usesExplicitDeepSeekThinking } from '../services/providers'
+import { IPC } from '../../shared/ipc'
 import {
   buildOutlinePrompt,
   buildSectionPrompt,
@@ -99,7 +103,7 @@ export class PaperCoordinator {
     }
   }
 
-  async generateSection(input: SectionGenerateInput): Promise<void> {
+  async generateSection(input: SectionGenerateInput, sender: WebContents): Promise<void> {
     const state = this.repository.snapshot()
     const project = state.projects.find((item) => item.id === input.projectId)
     const section = state.sections.find(
@@ -119,19 +123,57 @@ export class PaperCoordinator {
       ['生成章节草稿', `正在使用 ${profile.name} / ${input.model}`, 'running'],
       ['检查引用与篇幅', '等待章节生成完成', 'pending'],
     ])
+    const thinkingRequested = usesExplicitDeepSeekThinking(profile, input.model)
     await this.repository.saveRun(run)
-    await this.repository.updateSection(input.sectionId, { status: 'generating' })
+    await this.repository.updateSection(input.sectionId, {
+      status: 'generating',
+      content: '',
+      wordCount: 0,
+      reasoningContent: undefined,
+      generationError: undefined,
+      generationProviderId: profile.id,
+      generationModel: input.model,
+      thinkingRequested,
+    })
+    this.sendSection(sender, {
+      runId: run.id,
+      sectionId: input.sectionId,
+      type: 'started',
+      providerId: profile.id,
+      providerName: profile.name,
+      model: input.model,
+      thinkingRequested,
+    })
     let content = ''
+    let reasoningContent = ''
+    let savedSection: ManuscriptSection | undefined
 
     try {
       for await (const event of adapter.streamChat(messages, input.model)) {
-        if (event.type !== 'text-delta') continue
-        content += event.delta
-        if (content.length > MAX_GENERATED_CONTENT_CHARS) {
-          throw new Error('模型返回的章节内容超过本机安全上限。')
+        if (event.type === 'reasoning-delta') {
+          reasoningContent += event.delta
+          if (reasoningContent.length > MAX_GENERATED_CONTENT_CHARS) {
+            throw new Error('模型返回的章节推理内容超过本机安全上限。')
+          }
+          this.sendSection(sender, { runId: run.id, sectionId: input.sectionId, type: 'reasoning-delta', delta: event.delta })
+          continue
+        }
+        if (event.type === 'text-delta') {
+          content += event.delta
+          if (content.length > MAX_GENERATED_CONTENT_CHARS) {
+            throw new Error('模型返回的章节内容超过本机安全上限。')
+          }
+          this.sendSection(sender, { runId: run.id, sectionId: input.sectionId, type: 'text-delta', delta: event.delta })
         }
       }
-      await this.repository.saveSection(input.sectionId, content)
+      savedSection = await this.repository.saveSection(input.sectionId, content)
+      savedSection = await this.repository.updateSection(input.sectionId, {
+        reasoningContent: reasoningContent || undefined,
+        generationProviderId: profile.id,
+        generationModel: input.model,
+        thinkingRequested,
+        generationError: undefined,
+      })
 
       const included = state.literature.filter(
         (item) => item.projectId === input.projectId && item.included && item.origin !== 'demo',
@@ -187,9 +229,25 @@ export class PaperCoordinator {
           },
         ],
       })
+      this.sendSection(sender, {
+        runId: run.id,
+        sectionId: input.sectionId,
+        type: 'completed',
+        section: savedSection,
+      })
     } catch (error) {
-      await this.repository.updateSection(input.sectionId, { status: 'error' })
       const message = error instanceof Error ? error.message : '章节生成失败。'
+      if (!savedSection && content) {
+        savedSection = await this.repository.saveSection(input.sectionId, content)
+      }
+      const failedSection = await this.repository.updateSection(input.sectionId, {
+        status: 'error',
+        reasoningContent: reasoningContent || undefined,
+        generationProviderId: profile.id,
+        generationModel: input.model,
+        thinkingRequested,
+        generationError: message,
+      })
       await this.repository.updateRun(run.id, {
         status: 'error',
         error: message,
@@ -199,12 +257,23 @@ export class PaperCoordinator {
             : step,
         ),
       })
+      this.sendSection(sender, {
+        runId: run.id,
+        sectionId: input.sectionId,
+        type: 'error',
+        message,
+        section: failedSection,
+      })
       throw error
     }
   }
 
   quality(projectId: string) {
     return runProjectQualityChecks(this.repository.snapshot(), projectId)
+  }
+
+  private sendSection(sender: WebContents, event: SectionStreamEvent): void {
+    if (!sender.isDestroyed()) sender.send(IPC.sectionEvent, event)
   }
 }
 

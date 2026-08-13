@@ -214,6 +214,9 @@ function OutlineBranch({
         const hasChildren = children.length > 0
         const expanded = hasChildren && expandedIds.has(node.id)
         const selected = section?.id === selectedSectionId
+        const generated = Boolean(
+          section && ['draft', 'verified'].includes(section.status) && section.wordCount > 0,
+        )
         const childrenId = `academic-outline-children-${numberPath.join('-')}-${safeDomId(node.id)}`
         const meta = getSectionMeta(section, node)
 
@@ -264,7 +267,7 @@ function OutlineBranch({
                 onClick={() => section && onSelectSection(section)}
                 onKeyDown={handleKeyDown}
               >
-                <span className="academic-outline__number" aria-hidden="true">{heading.number}</span>
+                <span className={`academic-outline__number${generated ? ' is-generated' : ''}`} aria-hidden="true">{heading.number}</span>
                 <span className="academic-outline__copy">
                   <strong>{heading.title}</strong>
                   <small>{meta}</small>

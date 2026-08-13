@@ -19,9 +19,9 @@
 1. 打开“设置 → 模型提供商”，选择 OpenAI 兼容或 Anthropic，填写 Base URL、API Key 与模型；保存后执行连接测试。首版已实测本机 OpenAI 兼容服务与 DeepSeek 官方 OpenAI 兼容接口；其他第三方厂商仍需使用你自己的密钥确认。
 2. 如需固定研究方法或写作规范，可进入“Skills”添加纯文本指令并选择是否启用。
 3. 点击“新建研究”，填写题目、学科、类型、篇幅和要求。默认保存在“文稿/学术 Agent”；也可通过“研究”旁的文件夹按钮修改今后新项目的根目录。
-4. 进入“文献库”，默认通过 OpenAlex + Crossref 检索；也可选择已连接 MCP 的结构化检索工具。
+4. 进入“文献库”，默认通过应用内置的 [arXiv MCP](https://github.com/blazickjp/arxiv-mcp-server) 检索；它需要本机已经安装 `uv`/`uvx`。OpenAlex + Crossref 与其他已连接 MCP 仍可在来源菜单中选择。
 5. 将需要的真实文献纳入项目，回到文稿页生成三级大纲，再通过 `1 / 1.1 / 1.1.1` 分级列表选择章节生成或手工编辑。
-6. 在底部输入框围绕项目或当前章节继续对话；模型选择器位于输入框左下角。
+6. 在底部输入框围绕项目或当前章节继续对话；模型选择器位于输入框右下角。
 7. 顶部可导出 Markdown 或 Word 文档，右侧“过程”页显示检索、生成、质量检查和导出步骤。
 
 ## 数据与安全
@@ -51,4 +51,4 @@ npm run typecheck
 npm run dmg
 ```
 
-详细设计见 `implementation_plan.md`；界面验收见 `design-qa.md`；安装、功能和边界证据见 `verification-report.md` 与 `task.md`。
+持续开发记录见 `DEVELOPMENT_LOG.md`；详细设计见 `implementation_plan.md`；界面验收见 `design-qa.md`；安装、功能和边界证据见 `verification-report.md` 与 `task.md`。

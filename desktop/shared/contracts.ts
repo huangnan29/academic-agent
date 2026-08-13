@@ -60,6 +60,37 @@ export interface Conversation extends BaseEntity {
   unread?: boolean
   /** 用户选择手动排序时使用的稳定顺序。 */
   manualOrder?: number
+  /** 对话持续追踪的目标，仅作用于本应用当前对话。 */
+  goal?: string
+  /** 计划模式只输出分析与步骤，不把计划描述成已经执行。 */
+  planMode?: boolean
+  /** 当前对话的本机操作授权策略；默认必须先询问用户。 */
+  accessMode?: ConversationAccessMode
+}
+
+export type ConversationAccessMode = 'ask' | 'full'
+
+export type SystemPermissionStatus =
+  | 'granted'
+  | 'denied'
+  | 'not-determined'
+  | 'restricted'
+  | 'unknown'
+  | 'unsupported'
+
+export type SystemPermissionKind =
+  | 'accessibility'
+  | 'full-disk-access'
+  | 'screen-recording'
+
+export interface SystemPermissionSnapshot {
+  platform: 'macos' | 'unsupported'
+  accessibility: SystemPermissionStatus
+  fullDiskAccess: SystemPermissionStatus
+  screenRecording: SystemPermissionStatus
+  /** 完全访问只在应用确实拥有辅助功能和完全磁盘访问后才能启用。 */
+  fullAccessReady: boolean
+  checkedAt: string
 }
 
 export interface ConversationUpdateInput {
@@ -68,6 +99,21 @@ export interface ConversationUpdateInput {
   pinned?: boolean
   archived?: boolean
   unread?: boolean
+  goal?: string
+  planMode?: boolean
+  accessMode?: ConversationAccessMode
+}
+
+export interface ConversationAttachment extends BaseEntity {
+  projectId: string
+  conversationId: string
+  name: string
+  path: string
+  kind: 'file' | 'folder'
+  extractedText: string
+  fileCount: number
+  byteCount: number
+  warning?: string
 }
 
 export type SidebarViewMode = 'projects' | 'list'
@@ -79,6 +125,7 @@ export interface SidebarPreferencesInput {
   expandedProjectIds?: string[]
   showArchived?: boolean
   sidebarWidth?: number
+  rightPanelWidth?: number
   projectOrder?: string[]
   conversationOrder?: string[]
 }
@@ -91,6 +138,8 @@ export interface ChatMessage extends BaseEntity {
   conversationId: string
   role: MessageRole
   content: string
+  /** 仅保存模型服务明确返回的 reasoning/thinking 流，不由应用模拟。 */
+  reasoningContent?: string
   status: MessageStatus
   providerId?: string
   model?: string
@@ -195,6 +244,15 @@ export interface ManuscriptSection extends BaseEntity {
   status: 'pending' | 'generating' | 'draft' | 'verified' | 'error'
   wordCount: number
   version: number
+  /** 最近一次模型生成所使用的提供商与模型，仅用于本机过程追溯。 */
+  generationProviderId?: string
+  generationModel?: string
+  /** 仅保存模型服务明确返回的章节推理流，不由应用模拟。 */
+  reasoningContent?: string
+  /** 当前请求是否显式要求提供商开启 Thinking。 */
+  thinkingRequested?: boolean
+  /** 章节生成失败时保留可读错误；已经收到的正文片段不会被清空。 */
+  generationError?: string
   /**
    * 当前小节从哪一条父章节正文中拆分得到。
    * 父章节仍是完整主稿；带此字段的小节只是可单独查看和编辑的同步视图。
@@ -288,6 +346,7 @@ export interface WorkspaceState {
   schemaVersion: number
   projects: Project[]
   conversations: Conversation[]
+  attachments: ConversationAttachment[]
   messages: ChatMessage[]
   providers: ProviderProfile[]
   literature: LiteratureRecord[]
@@ -314,6 +373,8 @@ export interface WorkspaceState {
     sidebarShowArchived?: boolean
     /** 展开状态下由用户拖动保存的侧栏宽度。 */
     sidebarWidth?: number
+    /** 展开状态下由用户拖动保存的右侧学术工作台宽度。 */
+    rightPanelWidth?: number
     demoMode: boolean
   }
 }
@@ -331,6 +392,7 @@ export interface ChatStartInput {
 export type ChatStreamEvent =
   | { runId: string; type: 'started'; message: ChatMessage }
   | { runId: string; type: 'text-delta'; delta: string }
+  | { runId: string; type: 'reasoning-delta'; delta: string }
   | { runId: string; type: 'step'; step: AgentStep }
   | { runId: string; type: 'completed'; message: ChatMessage }
   | { runId: string; type: 'cancelled'; message: ChatMessage }
@@ -348,5 +410,20 @@ export interface SectionGenerateInput {
   providerId: string
   model: string
 }
+
+export type SectionStreamEvent =
+  | {
+      runId: string
+      sectionId: string
+      type: 'started'
+      providerId: string
+      providerName: string
+      model: string
+      thinkingRequested: boolean
+    }
+  | { runId: string; sectionId: string; type: 'text-delta'; delta: string }
+  | { runId: string; sectionId: string; type: 'reasoning-delta'; delta: string }
+  | { runId: string; sectionId: string; type: 'completed'; section: ManuscriptSection }
+  | { runId: string; sectionId: string; type: 'error'; message: string; section: ManuscriptSection }
 
 export type ExportFormat = 'md' | 'docx'

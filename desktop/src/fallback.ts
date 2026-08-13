@@ -8,17 +8,32 @@ import type {
   OutlineNode,
   Project,
   ProviderProfile,
+  SectionStreamEvent,
   SkillDefinition,
   SkillInput,
+  SystemPermissionSnapshot,
   WorkspaceState,
 } from '../shared/contracts'
 import { SKILL_LIMITS } from '../shared/contracts'
+import {
+  createDefaultArxivMcpServer,
+  ensureDefaultArxivMcpServer,
+} from '../shared/defaultMcp'
 import {
   saveSectionContentInState,
   synchronizeDerivedSections,
 } from '../shared/sectionContent'
 
 type PaperAgentApi = Window['paperAgent']
+
+const unsupportedPermissions = (): SystemPermissionSnapshot => ({
+  platform: 'unsupported',
+  accessibility: 'unsupported',
+  fullDiskAccess: 'unsupported',
+  screenRecording: 'unsupported',
+  fullAccessReady: false,
+  checkedAt: now(),
+})
 
 const STORAGE_KEY = 'aiwritepaper-browser-demo-v1'
 
@@ -622,6 +637,7 @@ const initialWorkspace = (): WorkspaceState => {
     schemaVersion: 1,
     projects: [project],
     conversations: [conversation],
+    attachments: [],
     messages,
     providers: [provider],
     literature: demoLiterature,
@@ -630,6 +646,7 @@ const initialWorkspace = (): WorkspaceState => {
     citations: [],
     runs: [run],
     mcpServers: [
+      createDefaultArxivMcpServer(now()),
       {
         id: 'mcp-demo',
         name: '公开文献门户（演示）',
@@ -663,6 +680,7 @@ const initialWorkspace = (): WorkspaceState => {
 
 let memoryState: WorkspaceState | null = null
 const listeners = new Set<(event: ChatStreamEvent) => void>()
+const sectionListeners = new Set<(event: SectionStreamEvent) => void>()
 const chatTimers = new Map<string, number[]>()
 
 function restoreActiveModelIfNeeded(state: WorkspaceState) {
@@ -719,7 +737,12 @@ function readState(): WorkspaceState {
         archived: conversation.archived === true,
         unread: conversation.unread === true,
         manualOrder: typeof conversation.manualOrder === 'number' ? conversation.manualOrder : index,
+        goal: typeof conversation.goal === 'string' ? conversation.goal : undefined,
+        planMode: conversation.planMode === true,
+        accessMode: conversation.accessMode === 'full' ? 'full' : 'ask',
       })),
+      attachments: Array.isArray(parsed.attachments) ? parsed.attachments : [],
+      mcpServers: ensureDefaultArxivMcpServer(parsed.mcpServers ?? [], now()),
       skills: Array.isArray(parsed.skills) ? parsed.skills : [],
       settings: {
         ...parsed.settings,
@@ -727,6 +750,9 @@ function readState(): WorkspaceState {
         sidebarShowArchived: parsed.settings?.sidebarShowArchived === true,
         sidebarWidth: typeof parsed.settings?.sidebarWidth === 'number'
           ? Math.max(240, Math.min(520, Math.round(parsed.settings.sidebarWidth)))
+          : undefined,
+        rightPanelWidth: typeof parsed.settings?.rightPanelWidth === 'number'
+          ? Math.max(320, Math.min(620, Math.round(parsed.settings.rightPanelWidth)))
           : undefined,
         sidebarChatSort: ['priority', 'recent', 'manual'].includes(
           parsed.settings?.sidebarChatSort ?? '',
@@ -770,6 +796,10 @@ function emit(event: ChatStreamEvent) {
   listeners.forEach((listener) => listener(event))
 }
 
+function emitSection(event: SectionStreamEvent) {
+  sectionListeners.forEach((listener) => listener(event))
+}
+
 const fallbackApi: PaperAgentApi = {
   workspace: {
     async get() {
@@ -796,6 +826,7 @@ const fallbackApi: PaperAgentApi = {
         }
         if (input.showArchived !== undefined) draft.settings.sidebarShowArchived = input.showArchived
         if (input.sidebarWidth !== undefined) draft.settings.sidebarWidth = input.sidebarWidth
+        if (input.rightPanelWidth !== undefined) draft.settings.rightPanelWidth = input.rightPanelWidth
         if (input.projectOrder) {
           const order = new Map(input.projectOrder.map((id, index) => [id, index]))
           draft.projects.forEach((project, index) => {
@@ -893,6 +924,9 @@ const fallbackApi: PaperAgentApi = {
         )
         draft.projects = draft.projects.filter((item) => item.id !== projectId)
         draft.conversations = draft.conversations.filter((item) => item.projectId !== projectId)
+        draft.attachments = draft.attachments.filter(
+          (item) => item.projectId !== projectId && !conversationIds.has(item.conversationId),
+        )
         draft.messages = draft.messages.filter(
           (item) => item.projectId !== projectId && !conversationIds.has(item.conversationId),
         )
@@ -990,6 +1024,9 @@ const fallbackApi: PaperAgentApi = {
         if (input.title !== undefined) conversation.title = input.title.trim()
         if (input.pinned !== undefined) conversation.pinned = input.pinned
         if (input.unread !== undefined) conversation.unread = input.unread
+        if (input.goal !== undefined) conversation.goal = input.goal.trim() || undefined
+        if (input.planMode !== undefined) conversation.planMode = input.planMode
+        if (input.accessMode !== undefined) conversation.accessMode = input.accessMode
         if (input.archived !== undefined) {
           conversation.archived = input.archived
           if (input.archived && project.activeConversationId === conversation.id) {
@@ -1058,6 +1095,9 @@ const fallbackApi: PaperAgentApi = {
         draft.messages.forEach((message) => {
           if (message.conversationId === conversation.id) message.projectId = targetProject.id
         })
+        draft.attachments.forEach((attachment) => {
+          if (attachment.conversationId === conversation.id) attachment.projectId = targetProject.id
+        })
         targetProject.activeConversationId = conversation.id
         draft.settings.activeProjectId = targetProject.id
         draft.settings.sidebarExpandedProjectIds = [
@@ -1071,6 +1111,29 @@ const fallbackApi: PaperAgentApi = {
       const conversation = readState().conversations.find((item) => item.id === conversationId)
       if (!conversation) throw new Error('对话不存在或已经被移除')
       await navigator.clipboard.writeText(conversation.id)
+    },
+    async chooseAttachments() {
+      throw new Error('浏览器演示无法读取本机文件，请使用桌面应用。')
+    },
+    async removeAttachment(attachmentId) {
+      const next = mutate((draft) => {
+        if (!draft.attachments.some((item) => item.id === attachmentId)) {
+          throw new Error('附件不存在或已经移除')
+        }
+        draft.attachments = draft.attachments.filter((item) => item.id !== attachmentId)
+      })
+      return clone(next)
+    },
+  },
+  systemPermissions: {
+    async get() {
+      return unsupportedPermissions()
+    },
+    async requestFullAccess() {
+      return unsupportedPermissions()
+    },
+    async openSettings() {
+      throw new Error('浏览器演示无法申请 macOS 系统权限，请使用桌面应用。')
     },
   },
   provider: {
@@ -1193,14 +1256,26 @@ const fallbackApi: PaperAgentApi = {
       )
       const outlineNodeId = sourceSection?.outlineNodeId ?? input.sectionId
       const target = findOutlineNode(outline, outlineNodeId)
+      const provider = readState().providers.find((item) => item.id === input.providerId)
+      const runId = makeId('section-run')
+      const fullContent = sourceSection
+        ? `## ${sourceSection.title}\n\n这是根据当前大纲生成的浏览器演示章节。真实应用会使用所选模型和已纳入文献逐段写作，并在右侧标记引用证据的核验状态。\n\n当前结果未连接真实模型与文献门户，不可作为正式论文内容。`
+        : target
+          ? `## ${target.title}\n\n这是浏览器演示章节，尚未调用真实模型。`
+          : ''
       mutate((draft) => {
         const existing = draft.sections.find(
           (item) => item.id === input.sectionId || item.outlineNodeId === input.sectionId,
         )
         if (existing) {
-          existing.status = 'draft'
-          existing.content = `## ${existing.title}\n\n这是根据当前大纲生成的浏览器演示章节。真实应用会使用所选模型和已纳入文献逐段写作，并在右侧标记引用证据的核验状态。\n\n当前结果未连接真实模型与文献门户，不可作为正式论文内容。`
-          existing.wordCount = 86
+          existing.status = 'generating'
+          existing.content = ''
+          existing.wordCount = 0
+          existing.reasoningContent = undefined
+          existing.generationError = undefined
+          existing.generationProviderId = input.providerId
+          existing.generationModel = input.model
+          existing.thinkingRequested = false
           existing.updatedAt = now()
         } else if (target) {
           draft.sections.push({
@@ -1209,18 +1284,49 @@ const fallbackApi: PaperAgentApi = {
             outlineNodeId,
             title: target.title,
             level: target.level,
-            content: `## ${target.title}\n\n这是浏览器演示章节，尚未调用真实模型。`,
-            status: 'draft',
-            wordCount: 28,
+            content: '',
+            status: 'generating',
+            wordCount: 0,
             version: 1,
+            generationProviderId: input.providerId,
+            generationModel: input.model,
+            thinkingRequested: false,
             origin: 'demo',
             verificationStatus: 'demo',
             createdAt: now(),
             updatedAt: now(),
           })
         }
+      })
+      emitSection({
+        runId,
+        sectionId: sourceSection?.id ?? input.sectionId,
+        type: 'started',
+        providerId: input.providerId,
+        providerName: provider?.name ?? '浏览器演示',
+        model: input.model,
+        thinkingRequested: false,
+      })
+      const deltas = fullContent.match(/.{1,5}/gs) ?? [fullContent]
+      for (const delta of deltas) {
+        await new Promise((resolve) => window.setTimeout(resolve, 24))
+        mutate((draft) => {
+          const existing = draft.sections.find((item) => item.id === (sourceSection?.id ?? input.sectionId))
+          if (existing) {
+            existing.content += delta
+            existing.wordCount = existing.content.replace(/\s+/g, '').length
+            existing.updatedAt = now()
+          }
+        })
+        emitSection({ runId, sectionId: sourceSection?.id ?? input.sectionId, type: 'text-delta', delta })
+      }
+      const completedState = mutate((draft) => {
+        const existing = draft.sections.find((item) => item.id === (sourceSection?.id ?? input.sectionId))
+        if (existing) saveSectionContentInState(draft, existing.id, fullContent, now())
         synchronizeDerivedSections(draft, input.projectId, now())
       })
+      const completed = completedState.sections.find((item) => item.id === (sourceSection?.id ?? input.sectionId))
+      if (completed) emitSection({ runId, sectionId: completed.id, type: 'completed', section: clone(completed) })
     },
     async save(sectionId, content) {
       mutate((draft) => {
@@ -1242,6 +1348,10 @@ const fallbackApi: PaperAgentApi = {
         restoreActiveModelIfNeeded(draft)
       })
       return clone(next)
+    },
+    onEvent(listener) {
+      sectionListeners.add(listener)
+      return () => sectionListeners.delete(listener)
     },
   },
   chat: {

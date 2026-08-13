@@ -1,17 +1,22 @@
 import {
   Activity,
+  ArrowUp,
   Archive,
   ArchiveRestore,
   BookOpen,
   Bot,
+  BrainCircuit,
+  Camera,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   CircleAlert,
   CircleCheck,
   CircleDot,
   Clock3,
   Copy,
+  Command,
   Database,
   Download,
   ExternalLink,
@@ -22,16 +27,20 @@ import {
   FolderInput,
   FolderOpen,
   GripVertical,
+  GitBranch,
   KeyRound,
   Library,
   ListChecks,
   ListTree,
+  Lightbulb,
   LayoutList,
   LoaderCircle,
   MessageSquareText,
   MessageSquarePlus,
   Mail,
   MailOpen,
+  Mic,
+  Monitor,
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
@@ -46,12 +55,12 @@ import {
   RefreshCw,
   Save,
   Search,
-  Send,
   Settings,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Square,
+  Target,
   Trash2,
   X,
   type LucideIcon,
@@ -71,6 +80,8 @@ import type {
   AgentStep,
   ChatMessage,
   Conversation,
+  ConversationAccessMode,
+  ConversationAttachment,
   ConversationUpdateInput,
   LiteratureRecord,
   McpServerConfig,
@@ -82,9 +93,15 @@ import type {
   SidebarPreferencesInput,
   SkillDefinition,
   SkillInput,
+  SystemPermissionKind,
+  SystemPermissionSnapshot,
   WorkspaceState,
 } from '../shared/contracts'
 import { SKILL_LIMITS } from '../shared/contracts'
+import {
+  DEFAULT_ARXIV_MCP_SERVER_ID,
+  DEFAULT_ARXIV_MCP_TOOL_NAME,
+} from '../shared/defaultMcp'
 import { isNativeBridge, paperAgent } from './fallback'
 import { OutlineTree } from './OutlineTree'
 
@@ -92,6 +109,22 @@ type Route = 'workspace' | 'library' | 'skills' | 'settings'
 type CenterMode = 'chat' | 'manuscript'
 type RightTab = 'literature' | 'drafts' | 'process'
 type SettingsTab = 'providers' | 'mcp' | 'local'
+type SettingsSection =
+  | 'general'
+  | 'appearance'
+  | 'voice'
+  | 'configuration'
+  | 'personalization'
+  | 'shortcuts'
+  | 'app-snapshot'
+  | 'browser'
+  | 'computer-control'
+  | 'hooks'
+  | 'connections'
+  | 'git'
+  | 'environment'
+  | 'worktrees'
+  | 'archived'
 
 const appIconUrl = new URL('../build/icon.png', import.meta.url).href
 
@@ -117,6 +150,7 @@ const emptyWorkspace: WorkspaceState = {
   schemaVersion: 1,
   projects: [],
   conversations: [],
+  attachments: [],
   messages: [],
   providers: [],
   literature: [],
@@ -251,8 +285,179 @@ interface ConversationMenuState {
 }
 
 const DEFAULT_SIDEBAR_WIDTH = 280
+const DEFAULT_RIGHT_PANEL_WIDTH = 380
 const MIN_SIDEBAR_WIDTH = 240
 const MAX_SIDEBAR_WIDTH = 520
+
+interface SettingsNavigationItem {
+  id: SettingsSection
+  label: string
+  keywords: string
+  icon: LucideIcon
+}
+
+const settingsNavigationGroups: Array<{ label: string; items: SettingsNavigationItem[] }> = [
+  {
+    label: '个人',
+    items: [
+      { id: 'general', label: '常规', keywords: '权限 文件夹 语言 本机', icon: Settings },
+      { id: 'appearance', label: '外观', keywords: '主题 浅色 深色 界面', icon: Sparkles },
+      { id: 'voice', label: '语音输入', keywords: '麦克风 语音 听写', icon: Mic },
+      { id: 'configuration', label: '配置', keywords: '模型 提供商 API MCP 本地数据', icon: SlidersHorizontal },
+      { id: 'personalization', label: '个性化', keywords: 'Skills 写作习惯 指令', icon: Bot },
+      { id: 'shortcuts', label: '键盘快捷键', keywords: '快捷键 Command 键盘', icon: Command },
+    ],
+  },
+  {
+    label: '集成',
+    items: [
+      { id: 'app-snapshot', label: '应用快照', keywords: '双 Command 截图 快照', icon: Camera },
+      { id: 'browser', label: '浏览器', keywords: '网页 浏览器 控制', icon: ExternalLink },
+      { id: 'computer-control', label: '电脑控制', keywords: '桌面 电脑 辅助功能', icon: Monitor },
+    ],
+  },
+  {
+    label: '编码',
+    items: [
+      { id: 'hooks', label: '钩子', keywords: 'Hooks 自动化', icon: PlugZap },
+      { id: 'connections', label: '连接', keywords: '远程 服务 连接', icon: ExternalLink },
+      { id: 'git', label: 'Git', keywords: '仓库 版本 分支', icon: GitBranch },
+      { id: 'environment', label: '环境', keywords: '环境变量 运行环境', icon: Database },
+      { id: 'worktrees', label: 'Worktrees', keywords: '工作树 分支 目录', icon: FolderOpen },
+    ],
+  },
+  {
+    label: '已归档',
+    items: [
+      { id: 'archived', label: '已归档的对话', keywords: '恢复 聊天 对话 归档', icon: Archive },
+    ],
+  },
+]
+
+function SettingsSidebar({
+  activeSection,
+  onSection,
+  onBack,
+  sidebarWidth,
+  onSidebarWidthChange,
+  onSidebarWidthCommit,
+}: {
+  activeSection: SettingsSection
+  onSection: (section: SettingsSection) => void
+  onBack: () => void
+  sidebarWidth: number
+  onSidebarWidthChange: (width: number) => void
+  onSidebarWidthCommit: (width: number) => void
+}) {
+  const [query, setQuery] = useState('')
+  const resizeStateRef = useRef<{ pointerId: number; startX: number; startWidth: number } | undefined>(undefined)
+  const latestWidthRef = useRef(sidebarWidth)
+  const normalizedQuery = query.trim().toLocaleLowerCase('zh-CN')
+  const visibleGroups = settingsNavigationGroups
+    .map((group) => ({
+      ...group,
+      items: normalizedQuery
+        ? group.items.filter((item) => `${item.label} ${item.keywords}`.toLocaleLowerCase('zh-CN').includes(normalizedQuery))
+        : group.items,
+    }))
+    .filter((group) => group.items.length > 0)
+
+  useEffect(() => {
+    latestWidthRef.current = sidebarWidth
+  }, [sidebarWidth])
+
+  const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    resizeStateRef.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: sidebarWidth }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.preventDefault()
+  }
+
+  const moveResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const state = resizeStateRef.current
+    if (!state || state.pointerId !== event.pointerId) return
+    const next = Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, state.startWidth + event.clientX - state.startX))
+    latestWidthRef.current = Math.round(next)
+    onSidebarWidthChange(latestWidthRef.current)
+  }
+
+  const finishResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const state = resizeStateRef.current
+    if (!state || state.pointerId !== event.pointerId) return
+    resizeStateRef.current = undefined
+    event.currentTarget.releasePointerCapture(event.pointerId)
+    onSidebarWidthCommit(latestWidthRef.current)
+  }
+
+  return (
+    <aside className="settings-sidebar" aria-label="设置导航">
+      <div className="settings-sidebar-titlebar window-drag-region">
+        <button type="button" className="settings-back-button no-drag" onClick={onBack}>
+          <ChevronLeft size={15} aria-hidden="true" />
+          <span>返回应用</span>
+        </button>
+      </div>
+      <div className="settings-sidebar-body">
+        <label className="settings-search">
+          <Search size={15} aria-hidden="true" />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索设置…" aria-label="搜索设置" />
+          {query && <button type="button" onClick={() => setQuery('')} aria-label="清空搜索"><X size={14} /></button>}
+        </label>
+        <nav className="settings-navigation">
+          {visibleGroups.map((group) => (
+            <section key={group.label} className="settings-navigation-group">
+              <h2>{group.label}</h2>
+              {group.items.map((item) => {
+                const Icon = item.icon
+                return (
+                  <button
+                    type="button"
+                    key={item.id}
+                    className={activeSection === item.id ? 'is-active' : ''}
+                    onClick={() => onSection(item.id)}
+                    aria-current={activeSection === item.id ? 'page' : undefined}
+                  >
+                    <Icon size={15} aria-hidden="true" />
+                    <span>{item.label}</span>
+                  </button>
+                )
+              })}
+            </section>
+          ))}
+          {visibleGroups.length === 0 && <p className="settings-search-empty">没有匹配的设置</p>}
+        </nav>
+      </div>
+      <div
+        className="sidebar-resizer"
+        role="separator"
+        aria-label="调整设置侧栏宽度"
+        aria-orientation="vertical"
+        aria-valuemin={MIN_SIDEBAR_WIDTH}
+        aria-valuemax={MAX_SIDEBAR_WIDTH}
+        aria-valuenow={sidebarWidth}
+        tabIndex={0}
+        onPointerDown={startResize}
+        onPointerMove={moveResize}
+        onPointerUp={finishResize}
+        onPointerCancel={finishResize}
+        onDoubleClick={() => {
+          latestWidthRef.current = DEFAULT_SIDEBAR_WIDTH
+          onSidebarWidthChange(DEFAULT_SIDEBAR_WIDTH)
+          onSidebarWidthCommit(DEFAULT_SIDEBAR_WIDTH)
+        }}
+        onKeyDown={(event) => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home'].includes(event.key)) return
+          event.preventDefault()
+          const next = event.key === 'Home'
+            ? DEFAULT_SIDEBAR_WIDTH
+            : Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, sidebarWidth + (event.key === 'ArrowRight' ? 12 : -12)))
+          latestWidthRef.current = next
+          onSidebarWidthChange(next)
+          onSidebarWidthCommit(next)
+        }}
+      />
+    </aside>
+  )
+}
 
 function Sidebar({
   workspace,
@@ -261,6 +466,7 @@ function Sidebar({
   collapsed,
   onToggle,
   onRoute,
+  onOpenSettings,
   onProject,
   onConversation,
   onCreateConversation,
@@ -284,6 +490,7 @@ function Sidebar({
   collapsed: boolean
   onToggle: () => void
   onRoute: (route: Route) => void
+  onOpenSettings: (section: SettingsSection) => void
   onProject: (projectId: string) => void
   onConversation: (projectId: string, conversationId: string) => void
   onCreateConversation: (projectId: string) => void
@@ -538,7 +745,7 @@ function Sidebar({
             <Library size={17} aria-hidden="true" />
             {!collapsed && <span>文献库</span>}
           </button>
-          <button type="button" className={route === 'settings' ? 'is-active' : ''} onClick={() => onRoute('settings')} title="模型与 MCP">
+          <button type="button" onClick={() => onOpenSettings('configuration')} title="模型与 MCP">
             <PlugZap size={17} aria-hidden="true" />
             {!collapsed && <span>模型与 MCP</span>}
           </button>
@@ -582,11 +789,11 @@ function Sidebar({
                     <span className="menu-heading">整理侧边栏</span>
                     <button type="button" role="menuitemradio" aria-checked={viewMode === 'projects'} onClick={() => onSetPreferences({ viewMode: 'projects' })}>
                       <Check size={14} className={viewMode === 'projects' ? '' : 'is-placeholder'} />
-                      <ListTree size={15} /> 按项目
+                      <ListTree size={15} /> <span>按项目</span>
                     </button>
                     <button type="button" role="menuitemradio" aria-checked={viewMode === 'list'} onClick={() => onSetPreferences({ viewMode: 'list' })}>
                       <Check size={14} className={viewMode === 'list' ? '' : 'is-placeholder'} />
-                      <LayoutList size={15} /> 在一个列表中
+                      <LayoutList size={15} /> <span>在一个列表中</span>
                     </button>
                     <span className="menu-heading">聊天排序方式</span>
                     {([
@@ -596,7 +803,7 @@ function Sidebar({
                     ] as const).map(([value, label]) => (
                       <button key={value} type="button" role="menuitemradio" aria-checked={chatSort === value} onClick={() => onSetPreferences({ chatSort: value })}>
                         <Check size={14} className={chatSort === value ? '' : 'is-placeholder'} />
-                        <SlidersHorizontal size={15} /> {label}
+                        <SlidersHorizontal size={15} /> <span>{label}</span>
                       </button>
                     ))}
                     <div className="menu-separator" />
@@ -607,12 +814,12 @@ function Sidebar({
                       onClick={() => onSetPreferences({ showArchived: !showArchived })}
                     >
                       <Check size={14} className={showArchived ? '' : 'is-placeholder'} />
-                      <Archive size={15} /> 显示已归档对话
+                      <Archive size={15} /> <span>显示已归档对话</span>
                     </button>
                     <div className="menu-separator" />
-                    <button type="button" role="menuitem" onClick={() => { setOrganizeMenuOpen(false); onChooseFolder() }} disabled={choosingFolder} title={researchFolderLabel}>
+                    <button className="sidebar-menu-folder-action" type="button" role="menuitem" onClick={() => { setOrganizeMenuOpen(false); onChooseFolder() }} disabled={choosingFolder} title={researchFolderLabel}>
                       {choosingFolder ? <LoaderCircle size={15} className="spin" /> : <FolderOpen size={15} />}
-                      设置默认研究文件夹
+                      <span>设置默认研究文件夹</span>
                     </button>
                   </div>
                 )}
@@ -830,7 +1037,7 @@ function Sidebar({
       </div>
 
       <div className="sidebar-footer">
-        <button type="button" className={route === 'settings' ? 'is-active' : ''} onClick={() => onRoute('settings')} title="设置">
+        <button type="button" onClick={() => onOpenSettings('general')} title="设置">
           <Settings size={17} aria-hidden="true" />
           {!collapsed && <span>设置</span>}
         </button>
@@ -1016,6 +1223,27 @@ function MarkdownMessage({ content }: { content: string }) {
   )
 }
 
+function ThinkingBlock({ content, streaming }: { content: string; streaming: boolean }) {
+  const [open, setOpen] = useState(streaming)
+
+  useEffect(() => {
+    if (streaming) setOpen(true)
+  }, [streaming])
+
+  if (!content.trim()) return null
+  return (
+    <details className={`thinking-block${streaming ? ' is-streaming' : ''}`} open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>
+        <BrainCircuit size={15} />
+        <span>{streaming ? '正在思考' : '思考过程'}</span>
+        {streaming && <LoaderCircle size={13} className="spin" />}
+        <ChevronRight size={14} className="thinking-chevron" />
+      </summary>
+      <div className="thinking-content">{content}</div>
+    </details>
+  )
+}
+
 function ChatView({
   messages,
   projectTitle,
@@ -1056,6 +1284,9 @@ function ChatView({
               <span>{formatTime(message.createdAt)}</span>
               {message.origin === 'demo' && <span className="demo-text">演示</span>}
             </div>
+            {message.role === 'assistant' && message.reasoningContent && (
+              <ThinkingBlock content={message.reasoningContent} streaming={message.status === 'streaming'} />
+            )}
             <MarkdownMessage content={message.content || '正在生成…'} />
             {message.status === 'streaming' && (
               <span className="streaming-line">
@@ -1089,6 +1320,7 @@ function ChatView({
 
 function ManuscriptView({
   section,
+  generationProviderName,
   canGenerateOutline,
   generatingOutline,
   isEditing,
@@ -1102,6 +1334,7 @@ function ManuscriptView({
   onConfigureModel,
 }: {
   section?: ManuscriptSection
+  generationProviderName?: string
   canGenerateOutline: boolean
   generatingOutline: boolean
   isEditing: boolean
@@ -1114,6 +1347,13 @@ function ManuscriptView({
   onGenerateOutline: () => void
   onConfigureModel: () => void
 }) {
+  const streamTailRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    if (section?.status !== 'generating') return
+    streamTailRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [section?.content, section?.reasoningContent, section?.status])
+
   if (!section) {
     return (
       <div className="document-empty-wrap">
@@ -1134,6 +1374,13 @@ function ManuscriptView({
     )
   }
 
+  const generating = section.status === 'generating'
+  const thinkingState = section.reasoningContent
+    ? (generating ? 'Thinking 正在输出' : 'Thinking 已返回')
+    : section.thinkingRequested
+      ? 'Thinking 已请求'
+      : undefined
+
   return (
     <div className="manuscript-view">
       <div className="manuscript-toolbar">
@@ -1141,14 +1388,22 @@ function ManuscriptView({
           <span>第 {section.version} 版</span>
           <span>{section.wordCount.toLocaleString('zh-CN')} 字</span>
           <StatusBadge status={section.status}>{sectionStatusLabel(section)}</StatusBadge>
+          {section.generationModel && (
+            <span className="section-generation-model">
+              <BrainCircuit size={12} /> {generationProviderName ? `${generationProviderName} · ` : ''}{section.generationModel}
+              {thinkingState ? ` · ${thinkingState}` : ''}
+            </span>
+          )}
         </div>
         <div className="toolbar-actions">
-          {section.status === 'pending' && (
+          {['pending', 'error'].includes(section.status) && (
             <button type="button" className="secondary-button" onClick={onGenerate}>
-              <FilePenLine size={15} /> 生成本章
+              <FilePenLine size={15} /> {section.status === 'error' ? '重新生成' : '生成本章'}
             </button>
           )}
-          {isEditing ? (
+          {generating ? (
+            <span className="section-streaming-label"><LoaderCircle size={14} className="spin" /> 正在流式生成</span>
+          ) : isEditing ? (
             <button type="button" className="primary-button compact" onClick={onSave} disabled={saving}>
               {saving ? <LoaderCircle size={15} className="spin" /> : <Save size={15} />}
               {saving ? '保存中' : '保存修改'}
@@ -1161,10 +1416,21 @@ function ManuscriptView({
         </div>
       </div>
       <article className="manuscript-paper">
+        {section.generationError && (
+          <div className="section-generation-error" role="alert"><CircleAlert size={16} /><span><strong>章节生成中断</strong><small>{section.generationError} 已收到的正文片段已经保留，可重新生成或手工编辑。</small></span></div>
+        )}
+        {section.reasoningContent && (
+          <div className="section-thinking-wrap"><ThinkingBlock content={section.reasoningContent} streaming={generating} /></div>
+        )}
         {isEditing ? (
           <textarea value={draft} onChange={(event) => onDraft(event.target.value)} aria-label="编辑当前章节" autoFocus />
-        ) : section.content ? (
-          <MarkdownMessage content={section.content} />
+        ) : section.content || generating ? (
+          <div className={`section-streaming-content${generating ? ' is-generating' : ''}`}>
+            {section.content ? <MarkdownMessage content={section.content} /> : (
+              <div className="section-stream-waiting"><LoaderCircle size={17} className="spin" /><span>{section.thinkingRequested ? '模型正在思考并准备章节结构…' : '模型正在准备章节内容…'}</span></div>
+            )}
+            {generating && <span ref={streamTailRef} className="section-stream-caret" aria-label="正文正在生成" />}
+          </div>
         ) : (
           <EmptyState icon={FileText} title="本章尚未生成" description="生成后可在这里继续编辑，并围绕选中文本向 Agent 追问。" />
         )}
@@ -1209,8 +1475,7 @@ function ModelPicker({
       <button type="button" className="model-picker-trigger" onClick={onToggle} aria-expanded={open} aria-haspopup="menu">
         <span className={`connection-dot ${provider?.lastHealth === 'connected' ? 'is-connected' : ''}`} />
         <span className="model-picker-label">
-          <small>{provider?.name ?? '尚未配置模型'}</small>
-          <strong>{activeModel ?? '前往设置'}</strong>
+          <strong>{activeModel ?? '选择模型'}</strong>
         </span>
         <ChevronDown size={14} aria-hidden="true" />
       </button>
@@ -1256,31 +1521,293 @@ function ModelPicker({
   )
 }
 
+function AccessPicker({
+  mode,
+  disabled,
+  onSelect,
+  onManage,
+}: {
+  mode: ConversationAccessMode
+  disabled: boolean
+  onSelect: (mode: ConversationAccessMode) => Promise<void>
+  onManage: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const close = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  const select = async (nextMode: ConversationAccessMode) => {
+    if (busy) return
+    if (nextMode === mode) {
+      setOpen(false)
+      if (nextMode === 'full') onManage()
+      return
+    }
+    setBusy(true)
+    try {
+      await onSelect(nextMode)
+      setOpen(false)
+    } catch {
+      // 上层统一显示错误提示。
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="access-picker" ref={rootRef}>
+      <button
+        type="button"
+        className={`access-picker-trigger${mode === 'full' ? ' is-full' : ''}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        disabled={disabled}
+      >
+        {mode === 'full' ? <ShieldCheck size={14} /> : <CircleAlert size={14} />}
+        <span>{mode === 'full' ? '完全访问权限' : '默认权限'}</span>
+        <ChevronDown size={13} />
+      </button>
+      {open && (
+        <div className="access-picker-menu" role="menu" aria-label="选择访问权限">
+          <span className="access-picker-heading">访问权限</span>
+          <button type="button" role="menuitemradio" aria-checked={mode === 'ask'} onClick={() => void select('ask')}>
+            <CircleAlert size={17} />
+            <span><strong>默认权限</strong><small>执行本机、MCP 或外部操作前询问</small></span>
+            {mode === 'ask' && <Check size={15} />}
+          </button>
+          <button type="button" role="menuitemradio" aria-checked={mode === 'full'} onClick={() => void select('full')}>
+            <ShieldCheck size={17} />
+            <span><strong>完全访问权限</strong><small>需通过 macOS 辅助功能与磁盘访问授权</small></span>
+            {mode === 'full' && <Check size={15} />}
+          </button>
+          <button type="button" className="access-picker-manage" role="menuitem" onClick={() => { setOpen(false); onManage() }}>
+            <Settings size={16} />
+            <span><strong>管理 macOS 权限</strong><small>查看真实授权状态并重新检测</small></span>
+            <ChevronRight size={15} />
+          </button>
+          <p>完全访问不等同于管理员或 root 权限，也不会绕过 macOS 的系统保护。</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const permissionStatusLabels: Record<SystemPermissionSnapshot['accessibility'], string> = {
+  granted: '已授权',
+  denied: '未授权',
+  'not-determined': '尚未询问',
+  restricted: '受系统限制',
+  unknown: '无法确认',
+  unsupported: '当前环境不支持',
+}
+
+function SystemPermissionDialog({
+  open,
+  snapshot,
+  busy,
+  onClose,
+  onRequest,
+  onRefresh,
+  onOpenSettings,
+  onEnable,
+}: {
+  open: boolean
+  snapshot?: SystemPermissionSnapshot
+  busy: boolean
+  onClose: () => void
+  onRequest: () => void
+  onRefresh: () => void
+  onOpenSettings: (kind: SystemPermissionKind) => void
+  onEnable: () => void
+}) {
+  const dialogRef = useRef<HTMLElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !busy) onClose()
+    }
+    const frame = window.requestAnimationFrame(() => dialogRef.current?.focus())
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open, busy, onClose])
+
+  if (!open) return null
+  const platformSupported = snapshot?.platform !== 'unsupported'
+  const rows: Array<{
+    kind: SystemPermissionKind
+    title: string
+    detail: string
+    status: SystemPermissionSnapshot['accessibility']
+    required: boolean
+  }> = [
+    {
+      kind: 'accessibility',
+      title: '辅助功能',
+      detail: '允许学术 Agent 在用户明确发起操作时控制其他应用界面。',
+      status: snapshot?.accessibility ?? 'unknown',
+      required: true,
+    },
+    {
+      kind: 'full-disk-access',
+      title: '完全磁盘访问',
+      detail: '允许访问受 macOS 隐私保护的文件位置；只能由你在系统设置中授予。',
+      status: snapshot?.fullDiskAccess ?? 'unknown',
+      required: true,
+    },
+    {
+      kind: 'screen-recording',
+      title: '屏幕录制',
+      detail: '仅在后续需要读取屏幕内容时使用，不影响当前完全访问模式。',
+      status: snapshot?.screenRecording ?? 'unknown',
+      required: false,
+    },
+  ]
+
+  return (
+    <div className="modal-backdrop system-permission-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}>
+      <section ref={dialogRef} tabIndex={-1} className="modal system-permission-modal" role="dialog" aria-modal="true" aria-labelledby="system-permission-title">
+        <header className="modal-header">
+          <div>
+            <span className="modal-icon"><ShieldCheck size={18} /></span>
+            <div>
+              <h2 id="system-permission-title">macOS 系统权限</h2>
+              <p>应用只读取真实系统状态；没有授权时不会把对话标记为完全访问。</p>
+            </div>
+          </div>
+          <IconButton icon={X} label="关闭系统权限" onClick={onClose} disabled={busy} />
+        </header>
+        <div className="system-permission-body">
+          {!platformSupported && (
+            <div className="system-permission-warning"><CircleAlert size={17} /><span>浏览器演示不能申请 macOS 权限，请在桌面应用中使用。</span></div>
+          )}
+          <div className="system-permission-list">
+            {rows.map((row) => (
+              <div className="system-permission-row" key={row.kind}>
+                <span className={`system-permission-state is-${row.status}`} aria-hidden="true">
+                  {row.status === 'granted' ? <Check size={15} /> : <CircleAlert size={15} />}
+                </span>
+                <span>
+                  <strong>{row.title}{row.required ? ' · 必需' : ' · 可选'}</strong>
+                  <small>{row.detail}</small>
+                </span>
+                <span className={`system-permission-label is-${row.status}`}>{permissionStatusLabels[row.status]}</span>
+                {row.kind === 'accessibility' && row.status !== 'granted' ? (
+                  <button type="button" className="secondary-button compact" onClick={onRequest} disabled={busy || !platformSupported}>申请</button>
+                ) : (
+                  <button type="button" className="secondary-button compact" onClick={() => onOpenSettings(row.kind)} disabled={busy || !platformSupported}>系统设置</button>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className={`system-permission-summary${snapshot?.fullAccessReady ? ' is-ready' : ''}`}>
+            {snapshot?.fullAccessReady ? <CircleCheck size={18} /> : <CircleAlert size={18} />}
+            <span>
+              <strong>{snapshot?.fullAccessReady ? '真实授权已经满足' : '完全访问尚未启用'}</strong>
+              <small>{snapshot?.fullAccessReady ? '可以为当前对话启用完全访问。' : '请完成两项必需权限，然后返回应用重新检测。更改完全磁盘访问后，macOS 可能要求重启应用。'}</small>
+            </span>
+          </div>
+        </div>
+        <footer className="modal-footer system-permission-footer">
+          <button type="button" className="secondary-button" onClick={onRefresh} disabled={busy || !platformSupported}>
+            {busy ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />} 重新检测
+          </button>
+          <span />
+          <button type="button" className="secondary-button" onClick={onClose} disabled={busy}>关闭</button>
+          <button type="button" className="primary-button compact" onClick={onEnable} disabled={busy || !snapshot?.fullAccessReady}>启用完全访问</button>
+        </footer>
+      </section>
+    </div>
+  )
+}
+
 function Composer({
   providers,
   activeProviderId,
   activeModel,
+  conversation,
+  attachments,
   running,
   contextLabel,
   onSelectModel,
   onSend,
   onCancel,
   onSettings,
+  onUpdateConversation,
+  onChooseAttachments,
+  onRemoveAttachment,
+  onRequestAccessMode,
+  onManagePermissions,
 }: {
   providers: ProviderProfile[]
   activeProviderId?: string
   activeModel?: string
+  conversation?: Conversation
+  attachments: ConversationAttachment[]
   running: boolean
   contextLabel: string
   onSelectModel: (providerId: string, model: string) => void
   onSend: (content: string) => void
   onCancel: () => void
   onSettings: () => void
+  onUpdateConversation: (input: ConversationUpdateInput) => Promise<void>
+  onChooseAttachments: () => Promise<void>
+  onRemoveAttachment: (attachmentId: string) => Promise<void>
+  onRequestAccessMode: (mode: ConversationAccessMode) => Promise<void>
+  onManagePermissions: () => void
 }) {
   const [value, setValue] = useState('')
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [addMenuOpen, setAddMenuOpen] = useState(false)
+  const [goalOpen, setGoalOpen] = useState(false)
+  const [goalDraft, setGoalDraft] = useState(conversation?.goal ?? '')
+  const [updatingMode, setUpdatingMode] = useState(false)
   const composingRef = useRef(false)
+  const addMenuRef = useRef<HTMLDivElement>(null)
   const canSend = Boolean(value.trim() && activeProviderId && activeModel && !running)
+  const accessMode: ConversationAccessMode = conversation?.accessMode === 'full' ? 'full' : 'ask'
+
+  useEffect(() => {
+    setGoalDraft(conversation?.goal ?? '')
+    setGoalOpen(false)
+    setAddMenuOpen(false)
+  }, [conversation?.id, conversation?.goal])
+
+  useEffect(() => {
+    if (!addMenuOpen) return
+    const close = (event: PointerEvent) => {
+      if (!addMenuRef.current?.contains(event.target as Node)) setAddMenuOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setAddMenuOpen(false)
+    }
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [addMenuOpen])
 
   const submit = () => {
     if (!canSend) return
@@ -1288,12 +1815,58 @@ function Composer({
     setValue('')
   }
 
+  const togglePlanMode = async () => {
+    if (!conversation || updatingMode) return
+    setUpdatingMode(true)
+    try {
+      await onUpdateConversation({
+        conversationId: conversation.id,
+        planMode: !conversation.planMode,
+      })
+      setAddMenuOpen(false)
+    } catch {
+      // 上层统一显示错误提示。
+    } finally {
+      setUpdatingMode(false)
+    }
+  }
+
+  const saveGoal = async () => {
+    if (!conversation || updatingMode) return
+    setUpdatingMode(true)
+    try {
+      await onUpdateConversation({ conversationId: conversation.id, goal: goalDraft })
+      setGoalOpen(false)
+    } catch {
+      // 上层统一显示错误提示。
+    } finally {
+      setUpdatingMode(false)
+    }
+  }
+
   return (
     <div className="composer-wrap">
       <div className="composer">
+        {attachments.length > 0 && (
+          <div className="composer-attachments" aria-label="当前对话附件">
+            {attachments.map((attachment) => (
+              <span className={`composer-attachment${attachment.warning ? ' has-warning' : ''}`} key={attachment.id} title={attachment.warning ?? attachment.path}>
+                {attachment.kind === 'folder' ? <FolderOpen size={14} /> : <Paperclip size={14} />}
+                <span>{attachment.name}</span>
+                <button type="button" onClick={() => onRemoveAttachment(attachment.id)} aria-label={`移除附件 ${attachment.name}`}>
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <textarea
           value={value}
           onChange={(event) => setValue(event.target.value)}
+          onInput={(event) => {
+            event.currentTarget.style.height = 'auto'
+            event.currentTarget.style.height = `${Math.min(180, Math.max(82, event.currentTarget.scrollHeight))}px`
+          }}
           onCompositionStart={() => {
             composingRef.current = true
           }}
@@ -1312,7 +1885,43 @@ function Composer({
         />
         <div className="composer-toolbar">
           <div className="composer-tools">
-            <IconButton icon={Paperclip} label="添加附件（首版暂未开放）" disabled />
+            <div className="composer-add" ref={addMenuRef}>
+              <IconButton
+                icon={Plus}
+                label="添加"
+                active={addMenuOpen}
+                onClick={() => setAddMenuOpen((current) => !current)}
+              />
+              {addMenuOpen && (
+                <div className="composer-add-menu" role="menu">
+                  <span className="composer-menu-heading">添加</span>
+                  <button type="button" role="menuitem" onClick={() => { setAddMenuOpen(false); void onChooseAttachments() }}>
+                    <Paperclip size={17} />
+                    <span><strong>文件和文件夹</strong><small>加入当前对话上下文</small></span>
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => { setGoalDraft(conversation?.goal ?? ''); setGoalOpen(true); setAddMenuOpen(false) }} disabled={!conversation}>
+                    <Target size={17} />
+                    <span><strong>目标</strong><small>{conversation?.goal ? '修改持续追踪的目标' : '设置要持续追踪的目标'}</small></span>
+                  </button>
+                  <button type="button" role="menuitemcheckbox" aria-checked={conversation?.planMode === true} onClick={() => void togglePlanMode()} disabled={!conversation || updatingMode}>
+                    <Lightbulb size={17} />
+                    <span><strong>计划模式</strong><small>{conversation?.planMode ? '已开启，点击关闭' : '先分析并形成步骤'}</small></span>
+                    {conversation?.planMode && <Check size={15} />}
+                  </button>
+                </div>
+              )}
+            </div>
+            <AccessPicker
+              mode={accessMode}
+              disabled={!conversation || updatingMode}
+              onSelect={onRequestAccessMode}
+              onManage={onManagePermissions}
+            />
+            <span className="composer-context-chip">{contextLabel}</span>
+            {conversation?.planMode && <span className="composer-mode-chip"><Lightbulb size={13} /> 计划</span>}
+            {conversation?.goal && <button type="button" className="composer-goal-chip" onClick={() => setGoalOpen(true)} title={conversation.goal}><Target size={13} /> 目标</button>}
+          </div>
+          <div className="composer-status">
             <ModelPicker
               providers={providers}
               activeProviderId={activeProviderId}
@@ -1328,21 +1937,33 @@ function Composer({
                 onSettings()
               }}
             />
-          </div>
-          <div className="composer-status">
-            <span>{contextLabel}</span>
             {running ? (
               <button type="button" className="send-button is-stop" onClick={onCancel} aria-label="停止生成">
                 <Square size={14} fill="currentColor" />
               </button>
             ) : (
               <button type="button" className="send-button" onClick={submit} disabled={!canSend} aria-label="发送消息">
-                <Send size={17} />
+                <ArrowUp size={18} />
               </button>
             )}
           </div>
         </div>
       </div>
+      {goalOpen && (
+        <div className="composer-goal-dialog" role="dialog" aria-modal="true" aria-label="设置对话目标">
+          <div>
+            <Target size={18} />
+            <span><strong>对话目标</strong><small>保存后会持续加入当前对话的模型上下文。</small></span>
+            <IconButton icon={X} label="关闭目标设置" onClick={() => setGoalOpen(false)} />
+          </div>
+          <textarea value={goalDraft} onChange={(event) => setGoalDraft(event.target.value)} maxLength={2000} placeholder="例如：完成一篇证据可追溯的中文教育学论文，并逐章核验引用。" autoFocus />
+          <div className="composer-goal-actions">
+            <span>{goalDraft.length}/2000</span>
+            <button type="button" className="secondary-button" onClick={() => setGoalDraft('')} disabled={updatingMode}>清除</button>
+            <button type="button" className="primary-button compact" onClick={() => void saveGoal()} disabled={updatingMode}>保存目标</button>
+          </div>
+        </div>
+      )}
       {!activeProviderId && (
         <button type="button" className="composer-hint" onClick={onSettings}>
           尚未配置可用模型，前往设置后即可开始生成
@@ -1450,6 +2071,9 @@ function RightWorkspace({
   onConfigureModel,
   onRefresh,
   onCloseDrawer,
+  width,
+  onWidthChange,
+  onWidthCommit,
 }: {
   tab: RightTab
   onTab: (tab: RightTab) => void
@@ -1470,12 +2094,67 @@ function RightWorkspace({
   onConfigureModel: () => void
   onRefresh: () => void
   onCloseDrawer: () => void
+  width: number
+  onWidthChange: (width: number) => void
+  onWidthCommit: (width: number) => void
 }) {
   const outlineNodes = outline ?? []
   const outlineSummary = summarizeOutline(outlineNodes)
+  const widthRef = useRef(width)
+
+  useEffect(() => {
+    widthRef.current = width
+  }, [width])
+
+  const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = widthRef.current
+    const handleMove = (moveEvent: PointerEvent) => {
+      const nextWidth = Math.max(320, Math.min(620, Math.round(startWidth + startX - moveEvent.clientX)))
+      widthRef.current = nextWidth
+      onWidthChange(nextWidth)
+    }
+    const handleUp = () => {
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleUp)
+      document.body.classList.remove('is-resizing-panel')
+      onWidthCommit(widthRef.current)
+    }
+    document.body.classList.add('is-resizing-panel')
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleUp)
+  }
 
   return (
     <aside className="right-workspace">
+      <div
+        className="right-resizer"
+        role="separator"
+        aria-label="调整学术工作台宽度"
+        aria-orientation="vertical"
+        aria-valuemin={320}
+        aria-valuemax={620}
+        aria-valuenow={width}
+        tabIndex={0}
+        onPointerDown={startResize}
+        onDoubleClick={() => {
+          widthRef.current = DEFAULT_RIGHT_PANEL_WIDTH
+          onWidthChange(DEFAULT_RIGHT_PANEL_WIDTH)
+          onWidthCommit(DEFAULT_RIGHT_PANEL_WIDTH)
+        }}
+        onKeyDown={(event) => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home'].includes(event.key)) return
+          event.preventDefault()
+          const nextWidth = event.key === 'Home'
+            ? DEFAULT_RIGHT_PANEL_WIDTH
+            : Math.max(320, Math.min(620, widthRef.current + (event.key === 'ArrowLeft' ? 16 : -16)))
+          widthRef.current = nextWidth
+          onWidthChange(nextWidth)
+          onWidthCommit(nextWidth)
+        }}
+      />
       <div className="right-titlebar">
         <strong>研究工作台</strong>
         <div className="right-title-actions">
@@ -1940,26 +2619,41 @@ function LibraryPage({
   onRefresh: () => Promise<void>
   onToast: (message: string, tone?: 'success' | 'error') => void
 }) {
+  const mcpSources = workspace.mcpServers
+    .filter((server) => server.enabled && server.tools.length > 0)
+    .flatMap((server) =>
+      server.tools
+        .filter((tool) => /search|literature|papers/i.test(tool.name))
+        .map((tool) => ({
+          key: `mcp:${server.id}:${tool.name}`,
+          label: server.id === DEFAULT_ARXIV_MCP_SERVER_ID
+            && tool.name === DEFAULT_ARXIV_MCP_TOOL_NAME
+            ? 'arXiv MCP（默认）'
+            : `${server.name} / ${tool.name}`,
+          serverId: server.id,
+          toolName: tool.name,
+        })),
+    )
+  const defaultArxivSource = mcpSources.find(
+    (source) => source.serverId === DEFAULT_ARXIV_MCP_SERVER_ID
+      && source.toolName === DEFAULT_ARXIV_MCP_TOOL_NAME,
+  )
   const [query, setQuery] = useState('')
   const [searching, setSearching] = useState(false)
   const [selected, setSelected] = useState<LiteratureRecord | undefined>(initialSelected)
   const [filter, setFilter] = useState<'all' | 'included' | 'verified' | 'pending'>('all')
-  const [sourceKey, setSourceKey] = useState('public')
-
-  const mcpSources = workspace.mcpServers
-    .filter((server) => server.enabled && server.tools.length > 0)
-    .flatMap((server) =>
-      server.tools.map((tool, index) => ({
-        key: `mcp:${server.id}:${index}`,
-        label: `${server.name} / ${tool.name}`,
-        serverId: server.id,
-        toolName: tool.name,
-      })),
-    )
+  const [sourceKey, setSourceKey] = useState(defaultArxivSource?.key ?? 'public')
+  const sourceInitializedRef = useRef(Boolean(defaultArxivSource))
 
   useEffect(() => {
     if (initialSelected) setSelected(initialSelected)
   }, [initialSelected?.id])
+
+  useEffect(() => {
+    if (sourceInitializedRef.current || !defaultArxivSource) return
+    sourceInitializedRef.current = true
+    setSourceKey(defaultArxivSource.key)
+  }, [defaultArxivSource?.key])
 
   useEffect(() => {
     if (sourceKey !== 'public' && !mcpSources.some((source) => source.key === sourceKey)) {
@@ -2599,7 +3293,7 @@ function McpSettings({
   )
 }
 
-function SettingsPage({
+function ConfigurationSettings({
   workspace,
   onRefresh,
   onToast,
@@ -2628,6 +3322,223 @@ function SettingsPage({
           <div className="local-setting-row"><span className="settings-row-icon"><FolderOpen size={17} /></span><div><strong>项目数据</strong><p>{workspace.projects.length} 个项目 · {workspace.literature.length} 条文献记录 · {workspace.artifacts.length} 个导出产物</p></div></div>
         </div>
       )}
+    </section>
+  )
+}
+
+const settingsSectionDescriptions: Record<Exclude<SettingsSection, 'configuration' | 'archived'>, { title: string; eyebrow: string; description: string }> = {
+  general: { title: '常规', eyebrow: '个人', description: '管理应用权限、本机研究目录和当前工作区状态。' },
+  appearance: { title: '外观', eyebrow: '个人', description: '调整学术 Agent 的显示方式与阅读密度。' },
+  voice: { title: '语音输入', eyebrow: '个人', description: '管理麦克风输入和语音转写入口。' },
+  personalization: { title: '个性化', eyebrow: '个人', description: '通过应用内 Skills 固定你的研究方法、写作习惯和输出偏好。' },
+  shortcuts: { title: '键盘快捷键', eyebrow: '个人', description: '查看当前工作区已经支持的键盘操作。' },
+  'app-snapshot': { title: '应用快照', eyebrow: '集成', description: '规划通过连续按两次 Command 捕获当前应用画面并加入对话。' },
+  browser: { title: '浏览器', eyebrow: '集成', description: '为研究任务连接受控的网页浏览能力。' },
+  'computer-control': { title: '电脑控制', eyebrow: '集成', description: '为用户明确发起的任务连接本机应用操作能力。' },
+  hooks: { title: '钩子', eyebrow: '编码', description: '在研究任务关键阶段触发应用内自动化。' },
+  connections: { title: '连接', eyebrow: '编码', description: '管理后续可用于隔离执行的远程或本机连接。' },
+  git: { title: 'Git', eyebrow: '编码', description: '管理研究项目与版本仓库之间的连接方式。' },
+  environment: { title: '环境', eyebrow: '编码', description: '查看后续任务执行环境与变量隔离策略。' },
+  worktrees: { title: 'Worktrees', eyebrow: '编码', description: '为并行研究或代码任务规划独立工作树。' },
+}
+
+function SettingsSectionHeader({ section }: { section: Exclude<SettingsSection, 'configuration' | 'archived'> }) {
+  const metadata = settingsSectionDescriptions[section]
+  return (
+    <header className="settings-hub-header">
+      <span>{metadata.eyebrow}</span>
+      <h1>{metadata.title}</h1>
+      <p>{metadata.description}</p>
+    </header>
+  )
+}
+
+function PlannedSetting({
+  icon: Icon,
+  title,
+  description,
+  actionLabel,
+  onAction,
+}: {
+  icon: LucideIcon
+  title: string
+  description: string
+  actionLabel: string
+  onAction: () => void
+}) {
+  return (
+    <div className="settings-card-row">
+      <span className="settings-card-icon"><Icon size={17} aria-hidden="true" /></span>
+      <span className="settings-card-copy"><strong>{title}</strong><small>{description}</small></span>
+      <span className="settings-planned-badge">计划中</span>
+      <button type="button" className="secondary-button compact" onClick={onAction}>{actionLabel}</button>
+    </div>
+  )
+}
+
+function SettingsPage({
+  section,
+  workspace,
+  systemPermissions,
+  choosingFolder,
+  onRefresh,
+  onToast,
+  onManagePermissions,
+  onChooseFolder,
+  onOpenSkills,
+  onRestoreConversation,
+  onRestoreAndOpen,
+}: {
+  section: SettingsSection
+  workspace: WorkspaceState
+  systemPermissions?: SystemPermissionSnapshot
+  choosingFolder: boolean
+  onRefresh: () => Promise<void>
+  onToast: (message: string, tone?: 'success' | 'error') => void
+  onManagePermissions: () => void
+  onChooseFolder: () => void
+  onOpenSkills: () => void
+  onRestoreConversation: (conversationId: string) => Promise<void>
+  onRestoreAndOpen: (projectId: string, conversationId: string) => Promise<void>
+}) {
+  if (section === 'configuration') {
+    return <ConfigurationSettings workspace={workspace} onRefresh={onRefresh} onToast={onToast} />
+  }
+
+  if (section === 'archived') {
+    const archivedConversations = [...workspace.conversations]
+      .filter((conversation) => conversation.archived)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    const projectById = new Map(workspace.projects.map((project) => [project.id, project]))
+    return (
+      <section className="settings-hub-page archived-settings-page">
+        <header className="settings-hub-header">
+          <span>已归档</span>
+          <h1>已归档的对话</h1>
+          <p>从侧栏归档的对话会保留全部消息和项目关联，可在这里恢复。</p>
+        </header>
+        <div className="settings-content-column">
+          {archivedConversations.length === 0 ? (
+            <div className="settings-empty-state"><Archive size={24} /><strong>没有已归档的对话</strong><small>对话菜单中的“归档聊天”会把内容移动到这里。</small></div>
+          ) : (
+            <section className="settings-card archived-conversation-list" aria-label="已归档的对话">
+              {archivedConversations.map((conversation) => {
+                const project = projectById.get(conversation.projectId)
+                return (
+                  <article className="archived-conversation-row" key={conversation.id}>
+                    <span className="settings-card-icon"><Archive size={16} /></span>
+                    <span className="settings-card-copy">
+                      <strong>{conversationDisplayTitle(conversation.title, project?.title ?? '')}</strong>
+                      <small>{project?.title ?? '原研究已移除'} · {conversation.messageIds.length} 条消息 · {formatTime(conversation.updatedAt)}</small>
+                    </span>
+                    <button type="button" className="secondary-button compact" onClick={() => { void onRestoreConversation(conversation.id) }}><ArchiveRestore size={14} /> 恢复</button>
+                    {project && <button type="button" className="primary-button compact" onClick={() => { void onRestoreAndOpen(project.id, conversation.id) }}>恢复并打开</button>}
+                  </article>
+                )
+              })}
+            </section>
+          )}
+        </div>
+      </section>
+    )
+  }
+
+  if (section === 'general') {
+    const accessReady = systemPermissions?.fullAccessReady === true
+    return (
+      <section className="settings-hub-page">
+        <SettingsSectionHeader section="general" />
+        <div className="settings-content-column">
+          <h2>权限</h2>
+          <section className="settings-card">
+            <div className="settings-card-row">
+              <span className="settings-card-icon"><ShieldCheck size={17} /></span>
+              <span className="settings-card-copy"><strong>系统操作权限</strong><small>辅助功能与完全磁盘访问均由 macOS 授予，应用不会绕过系统确认。</small></span>
+              <StatusBadge status={accessReady ? 'connected' : 'failed'}>{accessReady ? '已满足' : '需要检查'}</StatusBadge>
+              <button type="button" className="secondary-button compact" onClick={onManagePermissions}>管理权限</button>
+            </div>
+          </section>
+          <h2>常规</h2>
+          <section className="settings-card">
+            <div className="settings-card-row">
+              <span className="settings-card-icon"><FolderOpen size={17} /></span>
+              <span className="settings-card-copy"><strong>默认研究文件夹</strong><small>{workspace.settings.researchRootPath || '未设置时使用“文稿/学术 Agent”'}</small></span>
+              <button type="button" className="secondary-button compact" onClick={onChooseFolder} disabled={choosingFolder}>{choosingFolder ? <LoaderCircle size={14} className="spin" /> : <FolderOpen size={14} />} 选择</button>
+            </div>
+            <div className="settings-card-row">
+              <span className="settings-card-icon"><Database size={17} /></span>
+              <span className="settings-card-copy"><strong>本机优先存储</strong><small>{workspace.projects.length} 个研究 · {workspace.conversations.length} 个对话 · 数据默认不上传到学术 Agent 服务器。</small></span>
+              <StatusBadge status="connected">已启用</StatusBadge>
+            </div>
+          </section>
+        </div>
+      </section>
+    )
+  }
+
+  if (section === 'personalization') {
+    return (
+      <section className="settings-hub-page">
+        <SettingsSectionHeader section="personalization" />
+        <div className="settings-content-column">
+          <h2>应用内个性化</h2>
+          <section className="settings-card">
+            <div className="settings-card-row">
+              <span className="settings-card-icon"><Sparkles size={17} /></span>
+              <span className="settings-card-copy"><strong>Skills</strong><small>{workspace.skills.filter((skill) => skill.enabled).length} 个已启用；只读取学术 Agent 自己维护的 Skills。</small></span>
+              <button type="button" className="primary-button compact" onClick={onOpenSkills}>管理 Skills</button>
+            </div>
+          </section>
+        </div>
+      </section>
+    )
+  }
+
+  if (section === 'shortcuts') {
+    const shortcuts = [
+      ['发送消息', 'Enter'],
+      ['输入框换行', 'Shift', 'Enter'],
+      ['关闭菜单或弹窗', 'Esc'],
+      ['微调已聚焦的侧栏宽度', '←', '→'],
+      ['恢复侧栏默认宽度', 'Home'],
+    ]
+    return (
+      <section className="settings-hub-page">
+        <SettingsSectionHeader section="shortcuts" />
+        <div className="settings-content-column"><h2>当前快捷键</h2><section className="settings-card shortcut-list">
+          {shortcuts.map(([label, ...keys]) => <div className="settings-card-row" key={label}><span className="settings-card-copy"><strong>{label}</strong></span><span className="shortcut-keys">{keys.map((key) => <kbd key={key}>{key}</kbd>)}</span></div>)}
+        </section></div>
+      </section>
+    )
+  }
+
+  const plannedAction = (name: string) => onToast(`${name}入口已经建立，系统能力将在后续版本接入`)
+  const plannedContent: Record<Exclude<SettingsSection, 'general' | 'configuration' | 'personalization' | 'shortcuts' | 'archived'>, Array<[LucideIcon, string, string]>> = {
+    appearance: [[Sparkles, '界面主题', '当前沿用经过验收的浅色界面；深色与跟随系统将在后续版本接入。']],
+    voice: [[Mic, '语音转写', '入口已保留；麦克风授权、录音与本机转写尚未接入。']],
+    'app-snapshot': [[Camera, '连续按两次 Command', '计划捕获当前应用窗口并作为本轮对话附件；当前不会监听全局键盘或截取屏幕。']],
+    browser: [[ExternalLink, '受控浏览器', '计划由用户明确启动网页研究任务；当前不会读取浏览器历史或标签页。']],
+    'computer-control': [[Monitor, '电脑控制', '计划复用真实 macOS 权限中心；当前不会自动点击、输入或控制其他应用。']],
+    hooks: [[PlugZap, '任务钩子', '计划为检索完成、提纲完成和导出完成等阶段提供应用内触发器。']],
+    connections: [[ExternalLink, '执行连接', '计划管理隔离的本机与远程执行连接，不读取系统或 Codex 的连接配置。']],
+    git: [[GitBranch, 'Git 仓库', '计划让研究项目选择性连接仓库；当前不会修改任何仓库。']],
+    environment: [[Database, '任务环境', '计划显示可用运行环境与显式环境变量，不读取系统敏感变量。']],
+    worktrees: [[FolderOpen, '独立工作树', '计划为并行任务创建受控工作树；当前不会创建或删除目录。']],
+  }
+  const plannedItems = plannedContent[section]
+  return (
+    <section className="settings-hub-page">
+      <SettingsSectionHeader section={section} />
+      <div className="settings-content-column">
+        {section === 'app-snapshot' && <div className="snapshot-shortcut-preview" aria-label="连续按两次 Command"><kbd>⌘</kbd><span>再按一次</span><kbd>⌘</kbd></div>}
+        <h2>{['appearance', 'voice'].includes(section) ? '设置' : '能力'}</h2>
+        <section className="settings-card">
+          {plannedItems.map(([Icon, title, description]) => (
+            <PlannedSetting key={title} icon={Icon} title={title} description={description} actionLabel="查看状态" onAction={() => plannedAction(title)} />
+          ))}
+        </section>
+        <div className="settings-boundary-note"><CircleAlert size={16} /><span>这是可操作的设置入口，不代表系统能力已经启用。接入完成前，应用不会静默申请权限或执行相关操作。</span></div>
+      </div>
     </section>
   )
 }
@@ -2853,10 +3764,12 @@ export function App() {
   const [workspace, setWorkspace] = useState<WorkspaceState>(emptyWorkspace)
   const [loading, setLoading] = useState(true)
   const [route, setRoute] = useState<Route>('workspace')
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
   const [centerMode, setCenterMode] = useState<CenterMode>('chat')
   const [rightTab, setRightTab] = useState<RightTab>('literature')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH)
+  const [rightPanelWidth, setRightPanelWidth] = useState(DEFAULT_RIGHT_PANEL_WIDTH)
   const [rightOpen, setRightOpen] = useState(true)
   const [newProjectOpen, setNewProjectOpen] = useState(false)
   const [creatingProject, setCreatingProject] = useState(false)
@@ -2873,17 +3786,38 @@ export function App() {
   const [savingSection, setSavingSection] = useState(false)
   const [generatingOutline, setGeneratingOutline] = useState(false)
   const [exporting, setExporting] = useState<'md' | 'docx'>()
+  const [permissionCenterOpen, setPermissionCenterOpen] = useState(false)
+  const [systemPermissions, setSystemPermissions] = useState<SystemPermissionSnapshot>()
+  const [permissionBusy, setPermissionBusy] = useState(false)
   const [toast, setToast] = useState<{ message: string; tone: 'success' | 'error' }>()
+  const settingsReturnRouteRef = useRef<Route>('workspace')
 
   const refreshWorkspace = async () => {
     const next = await paperAgent.workspace.get()
-    setWorkspace(next)
+    setWorkspace((current) => {
+      for (const streamed of current.sections.filter((section) => section.status === 'generating')) {
+        const persisted = next.sections.find((section) => section.id === streamed.id)
+        if (!persisted || persisted.status !== 'generating') continue
+        if (streamed.content.length > persisted.content.length) persisted.content = streamed.content
+        if ((streamed.reasoningContent?.length ?? 0) > (persisted.reasoningContent?.length ?? 0)) {
+          persisted.reasoningContent = streamed.reasoningContent
+        }
+        persisted.wordCount = Math.max(persisted.wordCount, streamed.wordCount)
+        persisted.generationProviderId = streamed.generationProviderId
+        persisted.generationModel = streamed.generationModel
+        persisted.thinkingRequested = streamed.thinkingRequested
+      }
+      return next
+    })
   }
 
   useEffect(() => {
     refreshWorkspace()
       .catch(() => setToast({ message: '无法读取本机工作区', tone: 'error' }))
       .finally(() => setLoading(false))
+    paperAgent.systemPermissions.get()
+      .then(setSystemPermissions)
+      .catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -2893,10 +3827,20 @@ export function App() {
   }, [workspace.settings.sidebarWidth])
 
   useEffect(() => {
+    if (typeof workspace.settings.rightPanelWidth === 'number') {
+      setRightPanelWidth(workspace.settings.rightPanelWidth)
+    }
+  }, [workspace.settings.rightPanelWidth])
+
+  useEffect(() => {
     if (!toast) return
     const timer = window.setTimeout(() => setToast(undefined), 3200)
     return () => window.clearTimeout(timer)
   }, [toast])
+
+  useEffect(() => {
+    if (route !== 'settings') settingsReturnRouteRef.current = route
+  }, [route])
 
   useEffect(() => {
     const dispose = paperAgent.chat.onEvent((event) => {
@@ -2907,6 +3851,9 @@ export function App() {
         } else if (event.type === 'text-delta') {
           const message = next.messages.find((item) => item.runId === event.runId)
           if (message) message.content += event.delta
+        } else if (event.type === 'reasoning-delta') {
+          const message = next.messages.find((item) => item.runId === event.runId)
+          if (message) message.reasoningContent = `${message.reasoningContent ?? ''}${event.delta}`
         } else if (event.type === 'completed' || event.type === 'cancelled') {
           const index = next.messages.findIndex((item) => item.runId === event.runId)
           if (index >= 0) next.messages[index] = event.message
@@ -2919,6 +3866,36 @@ export function App() {
         refreshWorkspace().catch(() => undefined)
       }
       if (event.type === 'error') setToast({ message: event.message, tone: 'error' })
+    })
+    return dispose
+  }, [])
+
+  useEffect(() => {
+    const dispose = paperAgent.section.onEvent((event) => {
+      setWorkspace((current) => {
+        const next = structuredClone(current)
+        const index = next.sections.findIndex((section) => section.id === event.sectionId)
+        if (index < 0) return current
+        const section = next.sections[index]
+        if (event.type === 'started') {
+          section.status = 'generating'
+          section.content = ''
+          section.wordCount = 0
+          section.reasoningContent = undefined
+          section.generationError = undefined
+          section.generationProviderId = event.providerId
+          section.generationModel = event.model
+          section.thinkingRequested = event.thinkingRequested
+        } else if (event.type === 'text-delta') {
+          section.content += event.delta
+          section.wordCount = section.content.replace(/\s+/g, '').length
+        } else if (event.type === 'reasoning-delta') {
+          section.reasoningContent = `${section.reasoningContent ?? ''}${event.delta}`
+        } else if (event.type === 'completed' || event.type === 'error') {
+          next.sections[index] = event.section
+        }
+        return next
+      })
     })
     return dispose
   }, [])
@@ -2968,6 +3945,15 @@ export function App() {
 
   const showToast = (message: string, tone: 'success' | 'error' = 'success') => setToast({ message, tone })
 
+  const openSettings = (section: SettingsSection = 'general') => {
+    setSettingsSection(section)
+    setRoute('settings')
+  }
+
+  const closeSettings = () => {
+    setRoute(settingsReturnRouteRef.current === 'settings' ? 'workspace' : settingsReturnRouteRef.current)
+  }
+
   const selectProject = async (projectId: string) => {
     try {
       const next = await paperAgent.project.setActive(projectId)
@@ -3011,9 +3997,114 @@ export function App() {
       else if (input.pinned === true) showToast('聊天已置顶')
       else if (input.pinned === false) showToast('已取消置顶聊天')
       else if (input.title !== undefined) showToast('聊天名称已更新')
+      else if (input.goal !== undefined) showToast(input.goal.trim() ? '对话目标已更新' : '对话目标已清除')
+      else if (input.planMode !== undefined) showToast(input.planMode ? '计划模式已开启' : '计划模式已关闭')
+      else if (input.accessMode !== undefined) showToast(input.accessMode === 'full' ? '当前对话已切换为完全访问权限' : '当前对话已恢复默认权限')
     } catch (error) {
       showToast(error instanceof Error ? error.message : '更新聊天失败', 'error')
       throw error
+    }
+  }
+
+  const restoreConversation = async (conversationId: string) => {
+    await updateConversation({ conversationId, archived: false })
+  }
+
+  const restoreAndOpenConversation = async (projectId: string, conversationId: string) => {
+    try {
+      await paperAgent.conversation.update({ conversationId, archived: false })
+      const next = await paperAgent.conversation.setActive(projectId, conversationId)
+      setWorkspace(next)
+      setRoute('workspace')
+      setCenterMode('chat')
+      showToast('聊天已恢复并打开')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '恢复聊天失败', 'error')
+      throw error
+    }
+  }
+
+  const refreshSystemPermissions = async () => {
+    setPermissionBusy(true)
+    try {
+      const next = await paperAgent.systemPermissions.get()
+      setSystemPermissions(next)
+      return next
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '无法读取 macOS 权限状态', 'error')
+      throw error
+    } finally {
+      setPermissionBusy(false)
+    }
+  }
+
+  const requestFullAccess = async () => {
+    setPermissionCenterOpen(true)
+    setPermissionBusy(true)
+    try {
+      const next = await paperAgent.systemPermissions.requestFullAccess()
+      setSystemPermissions(next)
+      if (next.platform === 'unsupported') {
+        showToast('浏览器演示无法申请 macOS 权限，请使用桌面应用', 'error')
+      } else if (next.fullAccessReady && conversation) {
+        await updateConversation({ conversationId: conversation.id, accessMode: 'full' })
+      } else {
+        showToast('请在 macOS 系统设置完成必需授权，再返回重新检测', 'error')
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '申请 macOS 权限失败', 'error')
+    } finally {
+      setPermissionBusy(false)
+    }
+  }
+
+  const requestConversationAccessMode = async (mode: ConversationAccessMode) => {
+    if (!conversation) return
+    if (mode === 'ask') {
+      await updateConversation({ conversationId: conversation.id, accessMode: 'ask' })
+      return
+    }
+    await requestFullAccess()
+  }
+
+  const openSystemPermissionSettings = async (kind: SystemPermissionKind) => {
+    try {
+      await paperAgent.systemPermissions.openSettings(kind)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '无法打开 macOS 系统设置', 'error')
+    }
+  }
+
+  const enableFullAccess = async () => {
+    if (!conversation) return
+    const next = await refreshSystemPermissions()
+    if (!next.fullAccessReady) {
+      showToast('真实系统权限尚未满足，不能启用完全访问', 'error')
+      return
+    }
+    await updateConversation({ conversationId: conversation.id, accessMode: 'full' })
+    setPermissionCenterOpen(false)
+  }
+
+  const chooseConversationAttachments = async () => {
+    if (!conversation) return
+    try {
+      const next = await paperAgent.conversation.chooseAttachments(conversation.id)
+      setWorkspace(next)
+      const count = next.attachments.filter((item) => item.conversationId === conversation.id).length
+      showToast(count > 0 ? `当前对话已关联 ${count} 个附件` : '未选择附件')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '添加附件失败', 'error')
+    }
+  }
+
+  const removeConversationAttachment = async (attachmentId: string) => {
+    try {
+      const next = await paperAgent.conversation.removeAttachment(attachmentId)
+      setWorkspace(next)
+      showToast('附件已从当前对话移除')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '移除附件失败', 'error')
     }
   }
 
@@ -3151,6 +4242,8 @@ export function App() {
 
   const sendMessage = async (content: string) => {
     if (!activeProject || !conversation || !activeProviderId || !activeModel) return
+    const contextScope = centerMode === 'manuscript' ? 'section' : 'project'
+    if (centerMode === 'manuscript') setCenterMode('chat')
     const activeProvider = workspace.providers.find((item) => item.id === activeProviderId)
     const usesDemoProvider = activeProvider?.origin === 'demo'
     const optimistic: ChatMessage = {
@@ -3162,7 +4255,7 @@ export function App() {
       status: 'completed',
       providerId: activeProviderId,
       model: activeModel,
-      contextScope: centerMode === 'manuscript' ? 'section' : 'project',
+      contextScope,
       origin: usesDemoProvider ? 'demo' : 'live',
       verificationStatus: usesDemoProvider ? 'demo' : 'unverified',
       createdAt: new Date().toISOString(),
@@ -3176,7 +4269,7 @@ export function App() {
         content,
         providerId: activeProviderId,
         model: activeModel,
-        contextScope: centerMode === 'manuscript' ? 'section' : 'project',
+        contextScope,
       })
       setActiveRunId(result.runId)
       const persisted = await paperAgent.workspace.get()
@@ -3184,8 +4277,14 @@ export function App() {
         const streamed = current.messages.find((item) => item.runId === result.runId)
         if (streamed) {
           const index = persisted.messages.findIndex((item) => item.runId === result.runId)
-          if (index >= 0 && streamed.content.length > persisted.messages[index].content.length) {
-            persisted.messages[index] = streamed
+          if (index >= 0) {
+            const persistedMessage = persisted.messages[index]
+            if (streamed.content.length > persistedMessage.content.length) {
+              persistedMessage.content = streamed.content
+            }
+            if ((streamed.reasoningContent?.length ?? 0) > (persistedMessage.reasoningContent?.length ?? 0)) {
+              persistedMessage.reasoningContent = streamed.reasoningContent
+            }
           }
         }
         return persisted
@@ -3232,12 +4331,28 @@ export function App() {
 
   const generateSection = async () => {
     if (!activeProject || !selectedSection || !activeProviderId || !activeModel) return
+    const sectionId = selectedSection.id
+    setWorkspace((current) => {
+      const next = structuredClone(current)
+      const section = next.sections.find((item) => item.id === sectionId)
+      if (section) {
+        section.status = 'generating'
+        section.content = ''
+        section.wordCount = 0
+        section.reasoningContent = undefined
+        section.generationError = undefined
+        section.generationProviderId = activeProviderId
+        section.generationModel = activeModel
+      }
+      return next
+    })
     try {
-      await paperAgent.section.generate({ projectId: activeProject.id, sectionId: selectedSection.id, providerId: activeProviderId, model: activeModel })
+      await paperAgent.section.generate({ projectId: activeProject.id, sectionId, providerId: activeProviderId, model: activeModel })
       await refreshWorkspace()
       showToast('章节草稿已生成')
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '章节生成失败', 'error')
+      await refreshWorkspace().catch(() => undefined)
+      showToast('章节生成中断，已保留模型返回的正文片段', 'error')
     }
   }
 
@@ -3300,33 +4415,48 @@ export function App() {
 
   return (
     <main
-      className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}${rightOpen ? '' : ' right-collapsed'}`}
-      style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
+      className={`app-shell${sidebarCollapsed && route !== 'settings' ? ' sidebar-collapsed' : ''}${rightOpen ? '' : ' right-collapsed'}${route === 'settings' ? ' settings-mode' : ''}`}
+      style={{
+        '--sidebar-width': `${sidebarWidth}px`,
+        '--expanded-right-width': `${rightPanelWidth}px`,
+      } as CSSProperties}
     >
-      <Sidebar
-        workspace={workspace}
-        activeProjectId={activeProject?.id}
-        route={route}
-        collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed((current) => !current)}
-        onRoute={setRoute}
-        onProject={selectProject}
-        onConversation={selectConversation}
-        onCreateConversation={createConversation}
-        onUpdateConversation={updateConversation}
-        onMoveConversation={moveConversation}
-        onCopyConversationId={copyConversationId}
-        onPinProject={setProjectPinned}
-        onSetPreferences={setSidebarPreferences}
-        onCreate={() => setNewProjectOpen(true)}
-        onChooseFolder={chooseResearchFolder}
-        onDeleteProject={setProjectPendingDeletionId}
-        onRevealProject={revealResearchFolder}
-        sidebarWidth={sidebarWidth}
-        onSidebarWidthChange={setSidebarWidth}
-        onSidebarWidthCommit={(width) => setSidebarPreferences({ sidebarWidth: width })}
-        choosingFolder={choosingFolder}
-      />
+      {route === 'settings' ? (
+        <SettingsSidebar
+          activeSection={settingsSection}
+          onSection={setSettingsSection}
+          onBack={closeSettings}
+          sidebarWidth={sidebarWidth}
+          onSidebarWidthChange={setSidebarWidth}
+          onSidebarWidthCommit={(width) => setSidebarPreferences({ sidebarWidth: width })}
+        />
+      ) : (
+        <Sidebar
+          workspace={workspace}
+          activeProjectId={activeProject?.id}
+          route={route}
+          collapsed={sidebarCollapsed}
+          onToggle={() => setSidebarCollapsed((current) => !current)}
+          onRoute={setRoute}
+          onOpenSettings={openSettings}
+          onProject={selectProject}
+          onConversation={selectConversation}
+          onCreateConversation={createConversation}
+          onUpdateConversation={updateConversation}
+          onMoveConversation={moveConversation}
+          onCopyConversationId={copyConversationId}
+          onPinProject={setProjectPinned}
+          onSetPreferences={setSidebarPreferences}
+          onCreate={() => setNewProjectOpen(true)}
+          onChooseFolder={chooseResearchFolder}
+          onDeleteProject={setProjectPendingDeletionId}
+          onRevealProject={revealResearchFolder}
+          sidebarWidth={sidebarWidth}
+          onSidebarWidthChange={setSidebarWidth}
+          onSidebarWidthCommit={(width) => setSidebarPreferences({ sidebarWidth: width })}
+          choosingFolder={choosingFolder}
+        />
+      )}
 
       {route === 'workspace' && (
         <>
@@ -3379,13 +4509,14 @@ export function App() {
                 <button type="button" className="primary-button" onClick={() => setNewProjectOpen(true)}><Plus size={16} /> 新建研究项目</button>
               </div>
             ) : (
-              <div className="center-body">
+              <div className={`center-body${centerMode === 'manuscript' ? ' is-manuscript' : ''}`}>
                 <div className="center-scroll">
                   {centerMode === 'chat' ? (
                     <ChatView messages={messages} projectTitle={activeProject.title} onShowLiterature={() => { setRightTab('literature'); setRightOpen(true) }} />
                   ) : (
                     <ManuscriptView
                       section={selectedSection}
+                      generationProviderName={workspace.providers.find((provider) => provider.id === selectedSection?.generationProviderId)?.name}
                       canGenerateOutline={Boolean(activeProviderId && activeModel)}
                       generatingOutline={generatingOutline}
                       isEditing={editingSection}
@@ -3396,7 +4527,7 @@ export function App() {
                       onSave={saveSection}
                       onGenerate={generateSection}
                       onGenerateOutline={generateOutline}
-                      onConfigureModel={() => setRoute('settings')}
+                      onConfigureModel={() => openSettings('configuration')}
                     />
                   )}
                 </div>
@@ -3404,12 +4535,22 @@ export function App() {
                   providers={workspace.providers}
                   activeProviderId={activeProviderId}
                   activeModel={activeModel}
+                  conversation={conversation}
+                  attachments={workspace.attachments.filter((item) => item.conversationId === conversation?.id)}
                   running={Boolean(activeRunId)}
-                  contextLabel={centerMode === 'manuscript' ? '当前章节上下文' : '项目上下文'}
+                  contextLabel={centerMode === 'manuscript' ? '当前章节与项目上下文' : '项目与稿件上下文'}
                   onSelectModel={selectModel}
                   onSend={sendMessage}
                   onCancel={cancelRun}
-                  onSettings={() => setRoute('settings')}
+                  onSettings={() => openSettings('configuration')}
+                  onUpdateConversation={updateConversation}
+                  onChooseAttachments={chooseConversationAttachments}
+                  onRemoveAttachment={removeConversationAttachment}
+                  onRequestAccessMode={requestConversationAccessMode}
+                  onManagePermissions={() => {
+                    setPermissionCenterOpen(true)
+                    void refreshSystemPermissions()
+                  }}
                 />
               </div>
             )}
@@ -3433,13 +4574,16 @@ export function App() {
               canGenerateOutline={Boolean(activeProviderId && activeModel)}
               generatingOutline={generatingOutline}
               onGenerateOutline={generateOutline}
-              onConfigureModel={() => setRoute('settings')}
+              onConfigureModel={() => openSettings('configuration')}
               onRefresh={() => {
                 refreshWorkspace().catch((error) => {
                   showToast(error instanceof Error ? error.message : '刷新工作台失败', 'error')
                 })
               }}
               onCloseDrawer={() => setRightOpen(false)}
+              width={rightPanelWidth}
+              onWidthChange={setRightPanelWidth}
+              onWidthCommit={(width) => setSidebarPreferences({ rightPanelWidth: width })}
             />
           )}
         </>
@@ -3463,9 +4607,24 @@ export function App() {
       )}
 
       {route === 'settings' && (
-        <div className="full-route-column">
+        <div className="full-route-column settings-route-column">
           <div className="route-titlebar window-drag-region"><span>学术 Agent · 设置</span></div>
-          <SettingsPage workspace={workspace} onRefresh={refreshWorkspace} onToast={showToast} />
+          <SettingsPage
+            section={settingsSection}
+            workspace={workspace}
+            systemPermissions={systemPermissions}
+            choosingFolder={choosingFolder}
+            onRefresh={refreshWorkspace}
+            onToast={showToast}
+            onManagePermissions={() => {
+              setPermissionCenterOpen(true)
+              void refreshSystemPermissions()
+            }}
+            onChooseFolder={chooseResearchFolder}
+            onOpenSkills={() => setRoute('skills')}
+            onRestoreConversation={restoreConversation}
+            onRestoreAndOpen={restoreAndOpenConversation}
+          />
         </div>
       )}
 
@@ -3475,6 +4634,16 @@ export function App() {
         busy={deletingProject}
         onClose={() => !deletingProject && setProjectPendingDeletionId(undefined)}
         onConfirm={deleteProject}
+      />
+      <SystemPermissionDialog
+        open={permissionCenterOpen}
+        snapshot={systemPermissions}
+        busy={permissionBusy}
+        onClose={() => setPermissionCenterOpen(false)}
+        onRequest={() => { void requestFullAccess() }}
+        onRefresh={() => { void refreshSystemPermissions().catch(() => undefined) }}
+        onOpenSettings={(kind) => { void openSystemPermissionSettings(kind) }}
+        onEnable={() => { void enableFullAccess().catch(() => undefined) }}
       />
       {toast && (
         <div className={`toast toast-${toast.tone}`} role="status">

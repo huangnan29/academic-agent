@@ -142,6 +142,13 @@
   background: color-mix(in oklch, var(--background) 70%, var(--brand-soft));
 }
 
+.academic-outline__number.is-generated,
+.academic-outline__row.is-selected .academic-outline__number.is-generated {
+  border-color: color-mix(in oklch, var(--success) 28%, var(--border));
+  color: color-mix(in oklch, var(--success) 82%, var(--text));
+  background: color-mix(in oklch, var(--success-soft) 82%, var(--background));
+}
+
 .academic-outline__copy {
   display: grid;
   min-width: 0;

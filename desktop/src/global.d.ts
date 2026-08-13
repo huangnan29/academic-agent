@@ -16,9 +16,12 @@ import type {
   ProviderInput,
   ProviderProfile,
   SectionGenerateInput,
+  SectionStreamEvent,
   SidebarPreferencesInput,
   SkillDefinition,
   SkillInput,
+  SystemPermissionKind,
+  SystemPermissionSnapshot,
   WorkspaceState,
 } from '../shared/contracts'
 
@@ -44,6 +47,13 @@ declare global {
         update(input: ConversationUpdateInput): Promise<WorkspaceState>
         move(conversationId: string, targetProjectId: string): Promise<WorkspaceState>
         copyId(conversationId: string): Promise<void>
+        chooseAttachments(conversationId: string): Promise<WorkspaceState>
+        removeAttachment(attachmentId: string): Promise<WorkspaceState>
+      }
+      systemPermissions: {
+        get(): Promise<SystemPermissionSnapshot>
+        requestFullAccess(): Promise<SystemPermissionSnapshot>
+        openSettings(kind: SystemPermissionKind): Promise<void>
       }
       provider: {
         save(input: ProviderInput): Promise<ProviderProfile>
@@ -62,6 +72,7 @@ declare global {
         generate(input: SectionGenerateInput): Promise<void>
         save(sectionId: string, content: string): Promise<void>
         setActive(sectionId: string): Promise<WorkspaceState>
+        onEvent(listener: (event: SectionStreamEvent) => void): () => void
       }
       chat: {
         start(input: ChatStartInput): Promise<{ runId: string }>

@@ -10,6 +10,7 @@ import { LiteratureService } from '../services/literature'
 import { McpManager } from '../services/mcp'
 import { CredentialStore } from '../services/storage/credentialStore'
 import { WorkspaceRepository } from '../services/storage/workspaceRepository'
+import { SystemPermissionService } from './systemPermissions'
 
 const hasLock = app.requestSingleInstanceLock()
 if (!hasLock) app.quit()
@@ -41,11 +42,13 @@ async function startApplication(): Promise<void> {
     await Promise.all([repository.initialize(), credentials.initialize()])
 
     const configuration = new ConfigurationService(repository, credentials)
-    chatCoordinator = new ChatCoordinator(repository, configuration)
+    const systemPermissions = new SystemPermissionService()
+    chatCoordinator = new ChatCoordinator(repository, configuration, systemPermissions)
     const paperCoordinator = new PaperCoordinator(repository, configuration)
     const exporter = new ExportCoordinator(repository)
     const literature = new LiteratureService({ timeoutMs: 18_000 })
-    mcpManager = new McpManager([], { requestTimeoutMs: 15_000, maxListPages: 20 })
+    // arXiv MCP 首次通过 uvx 启动时可能需要准备本机缓存，给连接与检索保留合理时间。
+    mcpManager = new McpManager([], { requestTimeoutMs: 60_000, maxListPages: 20 })
 
     const dependencies = {
       rendererWebContentsId: 0,
@@ -55,6 +58,7 @@ async function startApplication(): Promise<void> {
       paper: paperCoordinator,
       exporter,
       literature,
+      systemPermissions,
       async testMcp(server: Parameters<typeof prepareMcpManager>[1]) {
         if (!mcpManager) throw new Error('MCP 管理器尚未初始化。')
         await prepareMcpManager(mcpManager, { ...server, enabled: true })

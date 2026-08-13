@@ -7,6 +7,7 @@ import type {
   ChatMessage,
   CitationEvidence,
   Conversation,
+  ConversationAttachment,
   ConversationUpdateInput,
   LiteratureRecord,
   McpServerConfig,
@@ -24,6 +25,10 @@ import {
   saveSectionContentInState,
   synchronizeDerivedSections,
 } from '../../../shared/sectionContent'
+import {
+  createDefaultArxivMcpServer,
+  ensureDefaultArxivMcpServer,
+} from '../../../shared/defaultMcp'
 
 const now = () => new Date().toISOString()
 
@@ -104,6 +109,7 @@ function demoState(): WorkspaceState {
         updatedAt: timestamp,
       },
     ],
+    attachments: [],
     messages: [
       {
         id: 'demo-message-user',
@@ -198,7 +204,7 @@ function demoState(): WorkspaceState {
     sections: [],
     citations: [],
     runs: [],
-    mcpServers: [],
+    mcpServers: [createDefaultArxivMcpServer(timestamp)],
     skills: [],
     artifacts: [],
     settings: {
@@ -228,7 +234,11 @@ function normalizeState(candidate: Partial<WorkspaceState>): WorkspaceState {
       archived: conversation.archived === true,
       unread: conversation.unread === true,
       manualOrder: typeof conversation.manualOrder === 'number' ? conversation.manualOrder : index,
+      goal: typeof conversation.goal === 'string' ? conversation.goal : undefined,
+      planMode: conversation.planMode === true,
+      accessMode: conversation.accessMode === 'full' ? 'full' : 'ask',
     })),
+    attachments: Array.isArray(candidate.attachments) ? candidate.attachments : [],
     messages: candidate.messages ?? base.messages,
     providers: candidate.providers ?? [],
     literature: candidate.literature ?? base.literature,
@@ -236,7 +246,7 @@ function normalizeState(candidate: Partial<WorkspaceState>): WorkspaceState {
     sections: candidate.sections ?? [],
     citations: candidate.citations ?? [],
     runs: candidate.runs ?? [],
-    mcpServers: candidate.mcpServers ?? [],
+    mcpServers: ensureDefaultArxivMcpServer(candidate.mcpServers ?? base.mcpServers, now()),
     skills: Array.isArray(candidate.skills) ? candidate.skills : [],
     artifacts: candidate.artifacts ?? [],
     settings: {
@@ -259,6 +269,10 @@ function normalizeState(candidate: Partial<WorkspaceState>): WorkspaceState {
   normalized.settings.sidebarWidth =
     typeof normalized.settings.sidebarWidth === 'number'
       ? Math.max(240, Math.min(520, Math.round(normalized.settings.sidebarWidth)))
+      : undefined
+  normalized.settings.rightPanelWidth =
+    typeof normalized.settings.rightPanelWidth === 'number'
+      ? Math.max(320, Math.min(620, Math.round(normalized.settings.rightPanelWidth)))
       : undefined
   normalized.settings.sidebarChatSort = ['priority', 'recent', 'manual'].includes(
     normalized.settings.sidebarChatSort ?? '',
@@ -467,6 +481,9 @@ export class WorkspaceRepository {
       if (input.title !== undefined) conversation.title = input.title.trim()
       if (input.pinned !== undefined) conversation.pinned = input.pinned
       if (input.unread !== undefined) conversation.unread = input.unread
+      if (input.goal !== undefined) conversation.goal = input.goal.trim() || undefined
+      if (input.planMode !== undefined) conversation.planMode = input.planMode
+      if (input.accessMode !== undefined) conversation.accessMode = input.accessMode
       if (input.archived !== undefined) {
         conversation.archived = input.archived
         if (input.archived && project.activeConversationId === conversation.id) {
@@ -563,6 +580,9 @@ export class WorkspaceRepository {
       state.messages.forEach((message) => {
         if (message.conversationId === conversation.id) message.projectId = targetProject.id
       })
+      state.attachments.forEach((attachment) => {
+        if (attachment.conversationId === conversation.id) attachment.projectId = targetProject.id
+      })
       state.runs.forEach((run) => {
         if (movedRunIds.has(run.id)) run.projectId = targetProject.id
       })
@@ -590,6 +610,7 @@ export class WorkspaceRepository {
       }
       if (input.showArchived !== undefined) state.settings.sidebarShowArchived = input.showArchived
       if (input.sidebarWidth !== undefined) state.settings.sidebarWidth = input.sidebarWidth
+      if (input.rightPanelWidth !== undefined) state.settings.rightPanelWidth = input.rightPanelWidth
       if (input.projectOrder) {
         const order = new Map(input.projectOrder.map((id, index) => [id, index]))
         state.projects.forEach((project, index) => {
@@ -631,6 +652,9 @@ export class WorkspaceRepository {
 
       state.projects = state.projects.filter((item) => item.id !== projectId)
       state.conversations = state.conversations.filter((item) => item.projectId !== projectId)
+      state.attachments = state.attachments.filter(
+        (item) => item.projectId !== projectId && !conversationIds.has(item.conversationId),
+      )
       state.messages = state.messages.filter(
         (item) => item.projectId !== projectId && !conversationIds.has(item.conversationId),
       )
@@ -662,6 +686,34 @@ export class WorkspaceRepository {
       if (!project) throw new Error('项目不存在或已经被移除。')
       project.researchFolderPath = folderPath
       project.updatedAt = now()
+      return state
+    })
+  }
+
+  async addConversationAttachments(
+    conversationId: string,
+    attachments: ConversationAttachment[],
+  ): Promise<WorkspaceState> {
+    return this.mutate((state) => {
+      const conversation = state.conversations.find((item) => item.id === conversationId)
+      if (!conversation) throw new Error('对话不存在或已经被移除。')
+      const project = state.projects.find((item) => item.id === conversation.projectId)
+      if (!project) throw new Error('对话所属研究不存在。')
+      const existing = state.attachments.filter((item) => item.conversationId === conversationId)
+      if (existing.length + attachments.length > 20) throw new Error('每个对话最多保留 20 个附件。')
+      const existingPaths = new Set(existing.map((item) => item.path))
+      state.attachments.push(...attachments.filter((item) => !existingPaths.has(item.path)))
+      conversation.updatedAt = now()
+      project.updatedAt = conversation.updatedAt
+      return state
+    })
+  }
+
+  async removeConversationAttachment(attachmentId: string): Promise<WorkspaceState> {
+    return this.mutate((state) => {
+      const attachment = state.attachments.find((item) => item.id === attachmentId)
+      if (!attachment) throw new Error('附件不存在或已经移除。')
+      state.attachments = state.attachments.filter((item) => item.id !== attachmentId)
       return state
     })
   }

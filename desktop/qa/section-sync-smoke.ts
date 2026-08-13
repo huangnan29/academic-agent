@@ -132,6 +132,7 @@ function legacyState(): WorkspaceState {
         updatedAt: timestamp,
       },
     ],
+    attachments: [],
     messages: [],
     providers: [],
     literature: [],
@@ -203,7 +204,16 @@ async function main() {
       targetSectionId: 'section-child',
     })
     assert.match(sectionContext, /这是原始背景内容/)
-    assert.doesNotMatch(sectionContext, /这是研究意义内容/)
+    assert.match(
+      sectionContext,
+      /这是研究意义内容/,
+      '当前章节对话仍应读取同一项目的完整已生成稿件背景',
+    )
+    assert.equal(
+      sectionContext.split('这是研究意义内容。').length - 1,
+      1,
+      '项目完整稿件中的同一兄弟章节不得重复注入',
+    )
     const manuscriptContext = buildPaperContext(state, projectId, { scope: 'manuscript' })
     assert.equal(
       manuscriptContext.split('这是技术演进内容。').length - 1,

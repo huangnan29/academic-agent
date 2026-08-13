@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
+import { delimiter, join } from 'node:path'
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import {
@@ -950,6 +952,14 @@ export class McpManager {
 
     if (config.transport.type === 'stdio') {
       const env = { ...getDefaultEnvironment(), ...(config.transport.env ?? {}) }
+      // Finder 启动的应用通常没有交互式 Shell 的 PATH；补入 macOS 常见工具目录，
+      // 使应用内置的 uvx MCP 与用户自行配置的本机工具都能被稳定找到。
+      env.PATH = [
+        join(homedir(), '.local', 'bin'),
+        '/opt/homebrew/bin',
+        '/usr/local/bin',
+        env.PATH,
+      ].filter(Boolean).join(delimiter)
       transport = new StdioClientTransport({
         command: config.transport.command,
         args: [...config.transport.args],

@@ -13,9 +13,11 @@ import { buildChatMessages } from '../services/pipeline'
 import { WorkspaceRepository } from '../services/storage/workspaceRepository'
 import { ConfigurationService } from './configuration'
 import { toUserMessage } from './errors'
+import { SystemPermissionService } from './systemPermissions'
 
 const now = () => new Date().toISOString()
 const MAX_ASSISTANT_CONTENT_CHARS = 2_000_000
+const MAX_REASONING_CONTENT_CHARS = 1_000_000
 
 export class ChatCoordinator {
   private readonly controllers = new Map<string, AbortController>()
@@ -23,6 +25,7 @@ export class ChatCoordinator {
   constructor(
     private readonly repository: WorkspaceRepository,
     private readonly configuration: ConfigurationService,
+    private readonly systemPermissions: SystemPermissionService,
   ) {}
 
   async start(input: ChatStartInput, sender: WebContents): Promise<{ runId: string }> {
@@ -35,6 +38,16 @@ export class ChatCoordinator {
       (item) => item.id === input.conversationId && item.projectId === input.projectId,
     )
     if (!project || !conversation) throw new Error('项目或对话不存在。')
+    if (conversation.accessMode === 'full') {
+      const permissions = await this.systemPermissions.snapshot()
+      if (!permissions.fullAccessReady) {
+        await this.repository.updateConversation({
+          conversationId: conversation.id,
+          accessMode: 'ask',
+        })
+        throw new Error('macOS 完全访问权限已经失效，当前对话已恢复默认权限。')
+      }
+    }
     const messages = buildChatMessages(stateBeforeMessage, input)
     const runId = randomUUID()
     const timestamp = now()
@@ -120,6 +133,7 @@ export class ChatCoordinator {
     const { runId } = assistantMessage
     if (!runId) return
     let content = ''
+    let reasoningContent = ''
 
     try {
       const profile = this.repository.getProvider(input.providerId)
@@ -128,16 +142,26 @@ export class ChatCoordinator {
       const adapter = createProviderAdapter(profile, apiKey, { requestTimeoutMs: 180_000 })
 
       for await (const event of adapter.streamChat(messages, input.model, controller.signal)) {
-        if (event.type !== 'text-delta') continue
-        content += event.delta
-        if (content.length > MAX_ASSISTANT_CONTENT_CHARS) {
-          throw new Error('模型回复超过本机安全上限，已停止继续接收。')
+        if (event.type === 'reasoning-delta') {
+          reasoningContent += event.delta
+          if (reasoningContent.length > MAX_REASONING_CONTENT_CHARS) {
+            throw new Error('模型推理内容超过本机安全上限，已停止继续接收。')
+          }
+          this.send(sender, { runId, type: 'reasoning-delta', delta: event.delta })
+          continue
         }
-        this.send(sender, { runId, type: 'text-delta', delta: event.delta })
+        if (event.type === 'text-delta') {
+          content += event.delta
+          if (content.length > MAX_ASSISTANT_CONTENT_CHARS) {
+            throw new Error('模型回复超过本机安全上限，已停止继续接收。')
+          }
+          this.send(sender, { runId, type: 'text-delta', delta: event.delta })
+        }
       }
 
       const completed = await this.repository.updateMessage(assistantMessage.id, {
         content,
+        reasoningContent: reasoningContent || undefined,
         status: 'completed',
       })
       await this.repository.updateRun(runId, {
@@ -157,6 +181,7 @@ export class ChatCoordinator {
       if (controller.signal.aborted) {
         const cancelled = await this.repository.updateMessage(assistantMessage.id, {
           content,
+          reasoningContent: reasoningContent || undefined,
           status: 'cancelled',
         })
         await this.repository.updateRun(runId, {
@@ -168,6 +193,7 @@ export class ChatCoordinator {
         const message = toUserMessage(error, '模型生成失败，请检查服务配置后重试。')
         await this.repository.updateMessage(assistantMessage.id, {
           content,
+          reasoningContent: reasoningContent || undefined,
           status: 'error',
           error: message,
         })

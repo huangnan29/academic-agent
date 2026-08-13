@@ -8,12 +8,18 @@ import type {
   McpResourceReadResult,
   McpServerConfig,
   McpToolCallResult,
+  SystemPermissionKind,
 } from '../../shared/contracts'
 import { IPC } from '../../shared/ipc'
+import {
+  DEFAULT_ARXIV_MCP_SERVER_ID,
+  DEFAULT_ARXIV_MCP_TOOL_NAME,
+} from '../../shared/defaultMcp'
 import { LiteratureService } from '../services/literature'
 import { createProviderAdapter } from '../services/providers'
 import { WorkspaceRepository } from '../services/storage/workspaceRepository'
 import { ChatCoordinator } from './chatCoordinator'
+import { extractConversationAttachment } from './attachments'
 import { ConfigurationService } from './configuration'
 import { toUserMessage } from './errors'
 import { ExportCoordinator } from './exportCoordinator'
@@ -32,6 +38,7 @@ import {
   skillInputSchema,
 } from './schemas'
 import { isAllowedExternalUrl } from './window'
+import { SystemPermissionService } from './systemPermissions'
 
 export interface McpTestResult {
   tools: McpServerConfig['tools']
@@ -46,6 +53,7 @@ export interface IpcDependencies {
   paper: PaperCoordinator
   exporter: ExportCoordinator
   literature: LiteratureService
+  systemPermissions: SystemPermissionService
   testMcp(server: McpServerConfig): Promise<McpTestResult>
   callMcpTool(
     server: McpServerConfig,
@@ -171,7 +179,25 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
   )
 
   handle(IPC.conversationUpdate, async (_event, payload: unknown) => {
-    return repository.updateConversation(conversationUpdateSchema.parse(payload))
+    const input = conversationUpdateSchema.parse(payload)
+    if (input.accessMode === 'full') {
+      const permissions = await dependencies.systemPermissions.snapshot()
+      if (!permissions.fullAccessReady) {
+        throw new Error('尚未完成 macOS 辅助功能与完全磁盘访问授权。')
+      }
+    }
+    return repository.updateConversation(input)
+  })
+
+  handle(IPC.systemPermissionsGet, () => dependencies.systemPermissions.snapshot())
+
+  handle(IPC.systemPermissionsRequestFullAccess, () =>
+    dependencies.systemPermissions.requestFullAccess(),
+  )
+
+  handle(IPC.systemPermissionsOpenSettings, async (_event, kind: unknown) => {
+    if (!isSystemPermissionKind(kind)) throw new Error('系统权限类型无效。')
+    await dependencies.systemPermissions.openSettings(kind)
   })
 
   handle(
@@ -188,6 +214,41 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
     const conversation = repository.snapshot().conversations.find((item) => item.id === conversationId)
     if (!conversation) throw new Error('对话不存在或已经被移除。')
     clipboard.writeText(conversation.id)
+  })
+
+  handle(IPC.conversationChooseAttachments, async (event, conversationId: unknown) => {
+    assertId(conversationId, '对话')
+    const snapshot = repository.snapshot()
+    const conversation = snapshot.conversations.find((item) => item.id === conversationId)
+    if (!conversation) throw new Error('对话不存在或已经被移除。')
+    const project = snapshot.projects.find((item) => item.id === conversation.projectId)
+    if (!project) throw new Error('对话所属研究不存在。')
+    const parent = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const options: Electron.OpenDialogOptions = {
+      title: '添加到当前对话',
+      buttonLabel: '添加',
+      properties: ['openFile', 'openDirectory', 'multiSelections'],
+      message: '文本文件会在本机提取内容并加入当前对话上下文。',
+    }
+    const result = parent
+      ? await dialog.showOpenDialog(parent, options)
+      : await dialog.showOpenDialog(options)
+    if (result.canceled || result.filePaths.length === 0) return snapshot
+    if (result.filePaths.length > 10) throw new Error('每次最多添加 10 个文件或文件夹。')
+    const attachments = await Promise.all(
+      result.filePaths.map((selectedPath) => extractConversationAttachment(selectedPath, {
+        projectId: project.id,
+        conversationId: conversation.id,
+        origin: project.origin,
+        verificationStatus: project.verificationStatus,
+      })),
+    )
+    return repository.addConversationAttachments(conversation.id, attachments)
+  })
+
+  handle(IPC.conversationRemoveAttachment, async (_event, attachmentId: unknown) => {
+    assertId(attachmentId, '附件')
+    return repository.removeConversationAttachment(attachmentId)
   })
 
   handle(IPC.providerSave, async (_event, payload) => {
@@ -298,8 +359,8 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
     return sanitized
   })
 
-  handle(IPC.sectionGenerate, async (_event, payload) => {
-    await paper.generateSection(sectionGenerateSchema.parse(payload))
+  handle(IPC.sectionGenerate, async (event, payload) => {
+    await paper.generateSection(sectionGenerateSchema.parse(payload), event.sender)
   })
 
   handle(IPC.sectionSave, async (_event, sectionId: unknown, content: unknown) => {
@@ -440,13 +501,16 @@ async function searchLiteratureWithMcp(
   if (!input.mcp) return []
   const server = configuration.resolvedMcpServer(input.mcp.serverId)
   if (!server.enabled) throw new Error('所选 MCP 服务尚未启用。')
+  const resultLimit = Math.min(20, Math.max(1, input.limit ?? 20))
+  const isBuiltInArxivSearch = server.id === DEFAULT_ARXIV_MCP_SERVER_ID
+    && input.mcp.toolName === DEFAULT_ARXIV_MCP_TOOL_NAME
   const result = await dependencies.callMcpTool(
     server,
     input.mcp.toolName,
     {
       [input.mcp.queryArgument ?? 'query']: input.query,
-      // 通用 MCP 文献工具通常只接受较小批次，统一限制为 1..20 以兼容其输入边界。
-      limit: Math.min(20, Math.max(1, input.limit ?? 20)),
+      // arXiv MCP 使用 max_results；其他通用文献 MCP 延续 limit 参数。
+      [isBuiltInArxivSearch ? 'max_results' : 'limit']: resultLimit,
     },
   )
   const candidates = extractMcpLiteratureCandidates(result)
@@ -533,12 +597,14 @@ function extractMcpLiteratureCandidates(result: McpToolCallResult): Array<{
         : typeof rawAuthors === 'string'
           ? rawAuthors.split(/[;,，；]/).map((item) => item.trim()).filter(Boolean)
           : []
-      const yearValue = Number(record.year ?? record.publication_year ?? record.published)
+      const yearValue = parseMcpYear(record.year ?? record.publication_year ?? record.published)
+      const resourceUri = stringValue(record.resource_uri)
       return {
         title: title.slice(0, 1_000),
         authors: authors.slice(0, 100),
-        year: Number.isInteger(yearValue) && yearValue >= 1000 && yearValue <= 3000 ? yearValue : undefined,
-        venue: stringValue(record.venue, record.journal, record.publisher)?.slice(0, 500),
+        year: yearValue,
+        venue: (stringValue(record.venue, record.journal, record.publisher)
+          ?? (resourceUri?.startsWith('arxiv://') ? 'arXiv' : undefined))?.slice(0, 500),
         abstract: stringValue(record.abstract, record.summary)?.slice(0, 20_000),
         doi: normalizeMcpDoi(record.doi)?.slice(0, 300),
         url: safeHttpUrl(stringValue(record.url, record.landing_page_url)),
@@ -556,6 +622,16 @@ function extractMcpLiteratureCandidates(result: McpToolCallResult): Array<{
     seen.add(identity)
     return true
   })
+}
+
+function parseMcpYear(value: unknown): number | undefined {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (Number.isInteger(numeric) && numeric >= 1000 && numeric <= 3000) return numeric
+  if (typeof value !== 'string') return undefined
+  const match = value.trim().match(/^(\d{4})/)
+  if (!match) return undefined
+  const year = Number(match[1])
+  return year >= 1000 && year <= 3000 ? year : undefined
 }
 
 function normalizeMcpDoi(value: unknown): string | undefined {
@@ -648,6 +724,14 @@ function assertId(value: unknown, label: string): asserts value is string {
   if (typeof value !== 'string' || !value.trim() || value.length > 200) {
     throw new Error(`${label}标识无效。`)
   }
+}
+
+function isSystemPermissionKind(value: unknown): value is SystemPermissionKind {
+  return (
+    value === 'accessibility' ||
+    value === 'full-disk-access' ||
+    value === 'screen-recording'
+  )
 }
 
 function safeResearchFolderName(title: string): string {
