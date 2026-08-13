@@ -348,7 +348,14 @@ select:focus-visible {
   text-align: left;
 }
 
+.research-folder-button > svg {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+}
+
 .research-folder-button span {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

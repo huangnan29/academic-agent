@@ -174,4 +174,28 @@
 - 标准 ARIA tree 的完整 roving tabindex 与上下键导航仍可作为 P3 后续优化；当前鼠标、Tab、折叠按钮及左右方向键均可操作，不阻塞本轮需求。
 - 参考图未提供 Skills 详情页视觉稿，因此详情页沿用既有设置工作台组件与 token；不把这一产品扩展误判为参考偏差。
 
+## 11. 研究文件夹图标尺寸复验
+
+### 11.1 视觉真值与实现证据
+
+- 问题截图：`/var/folders/nh/ytrqnycn7hx1xk7q138h1q540000gn/T/codex-clipboard-8a0d3f29-92e3-449a-bce4-211434f692fd.png`，524×296；状态为长标题项目展开，短标题项目收起。
+- 修复后原生全屏截图：`desktop/output/native-latest/folder-size-fix/second-active.png`，2960×1880；Electron CSS 视口为 1480×940，`deviceScaleFactor=2`，状态与问题截图一致。
+- 反向状态截图：`desktop/output/native-latest/folder-size-fix/first-active.png`，2960×1880；状态为短标题项目展开、长标题项目收起，用于排除图标状态差异。
+- 聚焦同画布比较：`desktop/output/native-latest/folder-size-fix/source-vs-fixed.png`，1048×296；左侧为用户问题截图，右侧为修复后的原生应用项目区域。实现区域从原生截图按 2 倍密度裁取并补齐至 524×296，没有以浏览器预览替代原生证据。
+
+### 11.2 根因、修复与复验
+
+- 初始 P1：项目行使用弹性布局，长标题会压缩左侧 SVG；因此问题跟“展开/收起”状态无关，同一个项目无论显示 `Folder` 还是 `FolderOpen` 都可能被挤小。
+- 修复：为 `.research-folder-button > svg` 设置固定 `16×16px`、`flex: 0 0 16px`；标题区域设置 `flex: 1 1 auto` 与 `min-width: 0`，只允许文字截断，不再让图标承担收缩。
+- 原生测量：短标题展开时两个项目图标均为 16×16px；长标题展开时两个项目图标仍均为 16×16px；四种组合的 `flex-shrink` 均为 `0`、`flex-basis` 均为 `16px`。
+- 复验结论：用户指出的尺寸不一致已消除，未发现余留 P0/P1/P2。
+
+### 11.3 必查表面
+
+- 字体与文案：标题字号、字重、截断规则与项目名称均未改变。
+- 间距与布局：项目行高度、图标与标题间距、活动对话缩进均保持不变；长标题仅在既有宽度内省略。
+- 颜色与 token：未新增颜色、阴影或状态 token。
+- 图像与图标：继续使用 `lucide-react` 的 Folder/FolderOpen；只固定布局尺寸，没有替换资产或手绘 SVG。
+- 交互状态：已在原生应用中分别点击两个项目，验证 Folder/FolderOpen 相互切换时尺寸不变；本轮未启动 Chrome。
+
 final result: passed
