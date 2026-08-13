@@ -389,4 +389,15 @@
 - 证据：`output/native-slash-menu-qa/slash-menu-groups.png`、`slash-selected-chips.png`。
 - 边界：本轮没有实际发起模型请求或 MCP 工具调用；验收证明的是能力选择、持久引用和上下文注入，不把能力发现冒充外部执行。
 
+## 24. Slash MCP 逐工具与真实执行验收（2026-08-13）
+
+- 第 23 节的“MCP 服务”粗粒度菜单已被本轮逐工具交互取代；旧截图仅作为历史证据，不代表当前界面。
+- 原生 Electron 隔离工作区中，`/` 菜单按 `Skills / MCP 工具` 分组，直接展示 `/search_papers`、`/download_paper`、`/list_papers`、`/read_paper`、`/get_abstract` 等实际发现工具。
+- 选中 `/search_papers` 后生成“`/search_papers · arXiv MCP（内置）`”标签，Slash 查询被清理，输入框显示检索词参数提示。重复选择去重，原生运行时错误为 0。
+- 菜单位于 1480×940 原生视口内，计算区域为 `x=279, y=352, width=738, height=430`，未越界或遮挡输入框工具栏。
+- 证据：`output/native-slash-tool-qa/slash-menu-groups.png`、`output/native-slash-tool-qa/slash-selected-chips.png`。
+- 真实链路：在隔离的打包 `.app` 中发送 `/search_papers ti:\"retrieval augmented generation\"`，arXiv MCP 成功返回 5 篇论文，过程页生成已完成的 `MCP · search_papers` 步骤，DeepSeek 基于真实结果完成回复。
+- 审计证据：运行步骤保存 `mcp-tool` 证据、结果 SHA-256 `f341d16049a6d3f3c38a955306bbaa004d5282ce696afe1b3d3536176758c250`、10,717 字符有界结果且 `truncated=false`。验收使用隔离数据目录，未污染用户正式项目。
+- 安全边界：外部返回以 BEGIN/END 不可信 JSON 区块注入；普通自然语言仍不会自动调用 MCP，只有菜单显式选择或 `/工具名` 命令才执行。
+
 final result: passed

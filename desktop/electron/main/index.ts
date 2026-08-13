@@ -48,7 +48,16 @@ async function startApplication(): Promise<void> {
     const exporter = new ExportCoordinator(repository)
     const literature = new LiteratureService({ timeoutMs: 18_000 })
     // arXiv MCP 首次通过 uvx 启动时可能需要准备本机缓存，给连接与检索保留合理时间。
-    mcpManager = new McpManager([], { requestTimeoutMs: 60_000, maxListPages: 20 })
+    mcpManager = new McpManager([], {
+      requestTimeoutMs: 60_000,
+      maxListPages: 20,
+      async onConfigChange(server) {
+        await repository.saveMcpServer(server)
+      },
+      async onConfigDelete(serverId) {
+        await repository.deleteMcpServer(serverId)
+      },
+    })
 
     const dependencies = {
       rendererWebContentsId: 0,
@@ -73,10 +82,11 @@ async function startApplication(): Promise<void> {
         server: Parameters<typeof prepareMcpManager>[1],
         name: string,
         args: Record<string, unknown>,
+        signal?: AbortSignal,
       ) {
         if (!mcpManager) throw new Error('MCP 管理器尚未初始化。')
         await prepareMcpManager(mcpManager, server)
-        return mcpManager.callTool(server.id, name, args)
+        return mcpManager.callTool(server.id, name, args, signal)
       },
       async readMcpResource(server: Parameters<typeof prepareMcpManager>[1], uri: string) {
         if (!mcpManager) throw new Error('MCP 管理器尚未初始化。')

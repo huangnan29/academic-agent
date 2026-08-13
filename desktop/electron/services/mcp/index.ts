@@ -524,6 +524,23 @@ function cloneBoundedJson<T>(
   }
 }
 
+function cloneToolInputSchema(value: unknown): Record<string, unknown> | undefined {
+  if (!isPlainRecord(value)) return undefined
+  try {
+    return cloneBoundedJson<Record<string, unknown>>(
+      value,
+      'MCP 工具输入结构',
+      64 * 1_024,
+      'discovery',
+      'MCP_INVALID_TOOL_SCHEMA',
+      'MCP_TOOL_SCHEMA_TOO_LARGE',
+    )
+  } catch {
+    // 单个服务返回异常 schema 时仍保留工具名称与说明，但不允许自动推断参数。
+    return undefined
+  }
+}
+
 function boundedPositiveInteger(value: number | undefined, fallback: number, maximum: number): number {
   if (!Number.isFinite(value)) return fallback
   return Math.min(maximum, Math.max(1, Math.trunc(value as number)))
@@ -761,6 +778,7 @@ export class McpManager {
     serverId: string,
     name: string,
     args: Record<string, unknown> = {},
+    signal?: AbortSignal,
   ): Promise<McpToolCallResult> {
     const toolName = validateOperationText(name, 'MCP 工具名称', 256)
     if (!isPlainRecord(args)) {
@@ -785,7 +803,7 @@ export class McpManager {
       result = await runtime.client.callTool(
         { name: toolName, arguments: safeArguments },
         undefined,
-        { timeout: this.requestTimeoutMs },
+        { timeout: this.requestTimeoutMs, signal },
       )
     } catch (error) {
       throw await this.operationError(
@@ -1041,7 +1059,11 @@ export class McpManager {
       for (const tool of result.tools) {
         const name = cleanText(tool.name, 256)
         if (!name || tools.has(name)) continue
-        tools.set(name, { name, description: cleanText(tool.description) })
+        tools.set(name, {
+          name,
+          description: cleanText(tool.description),
+          inputSchema: cloneToolInputSchema(tool.inputSchema),
+        })
       }
 
       if (!result.nextCursor) return [...tools.values()]

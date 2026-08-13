@@ -24,6 +24,13 @@
 6. 在底部输入框围绕项目或当前章节继续对话；模型选择器位于输入框右下角。
 7. 顶部可导出 Markdown 或 Word 文档，右侧“过程”页显示检索、生成、质量检查和导出步骤。
 
+### 在对话中调用 MCP 工具
+
+- 输入 `/` 后可搜索本应用已启用的 Skill 与具体 MCP 工具。选择 `/search_papers` 后，在输入框填写检索词并发送。
+- 也可直接输入 `/search_papers retrieval augmented generation`。需要更精确参数时可传 JSON，例如 `/search_papers {"query":"ti:\"retrieval augmented generation\"","max_results":5}`。
+- `/get_abstract 2305.06983`、`/download_paper 2305.06983`、`/read_paper 2305.06983` 等工具会按菜单中实际发现的服务执行。外部返回会先写入本机过程记录，再作为不可信资料交给模型。
+- 普通自然语言目前不会自动调用 MCP；必须选中具体工具或明确使用 `/工具名`，避免在默认权限下偷偷发起外部操作。
+
 ## 数据与安全
 
 - 项目、会话、文稿、文献和导出记录默认保存在当前 Mac 的应用数据目录。

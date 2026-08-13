@@ -215,6 +215,7 @@ export type MessageStatus = 'streaming' | 'completed' | 'cancelled' | 'error'
 export type ChatContextReference =
   | { kind: 'skill'; skillId: string }
   | { kind: 'mcp'; serverId: string }
+  | { kind: 'mcp-tool'; serverId: string; toolName: string }
 
 export interface ChatMessage extends BaseEntity {
   projectId: string
@@ -362,6 +363,16 @@ export interface AgentStep {
   status: 'pending' | 'running' | 'completed' | 'warning' | 'error' | 'stopped'
   startedAt?: string
   completedAt?: string
+  /** MCP 工具的有界、脱敏审计证据；不包含传输层凭证。 */
+  evidence?: {
+    kind: 'mcp-tool'
+    serverId: string
+    toolName: string
+    argumentsJson: string
+    resultJson: string
+    resultSha256: string
+    truncated: boolean
+  }
 }
 
 export interface AgentRun extends BaseEntity {
@@ -391,7 +402,7 @@ export interface McpServerConfig extends BaseEntity {
   transport: McpTransportConfig
   enabled: boolean
   status: 'disconnected' | 'connecting' | 'connected' | 'failed'
-  tools: Array<{ name: string; description?: string }>
+  tools: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>
   resources: Array<{ uri: string; name: string; description?: string }>
   lastError?: string
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-/** 在隔离的原生 Electron 工作区验证输入框“/”Skill/MCP 选择器；不会调用模型或 MCP 工具。 */
+/** 在隔离的原生 Electron 工作区验证输入框“/”Skill/MCP 工具选择器；不会发送消息。 */
 import { mkdir, writeFile } from 'node:fs/promises'
 
 const port = Number(process.env.AIWRITEPAPER_CDP_PORT ?? 9374)
@@ -39,23 +39,33 @@ async function main() {
         return value ? { x: value.x, y: value.y, width: value.width, height: value.height, viewportHeight: innerHeight } : null
       })(),
     }))()`)
-    if (!menu.groups.includes('Skills') || !menu.groups.includes('MCP 服务')) throw new Error('“/”菜单没有按 Skill/MCP 分组。')
-    if (!menu.labels.includes('论证链检查') || !menu.labels.some((label) => label?.includes('arXiv'))) throw new Error('“/”菜单没有列出应用内 Skill 或默认 MCP。')
+    if (!menu.groups.includes('Skills') || !menu.groups.includes('MCP 工具')) throw new Error('“/”菜单没有按 Skill/MCP 工具分组。')
+    if (!menu.labels.includes('论证链检查') || !menu.labels.includes('/search_papers')) throw new Error('“/”菜单没有列出应用内 Skill 或 arXiv search_papers。')
     if (!menu.rect || menu.rect.y < 0 || menu.rect.y + menu.rect.height > menu.rect.viewportHeight) throw new Error('“/”菜单超出窗口可见区域。')
     await capture(`${outputDir}/slash-menu-groups.png`)
 
-    await pressKey('Enter')
+    await evaluate(`(() => {
+      const option = [...document.querySelectorAll('.composer-slash-group > button')]
+        .find((item) => item.querySelector('.composer-slash-copy strong')?.textContent?.trim() === '论证链检查')
+      if (!(option instanceof HTMLButtonElement)) throw new Error('未找到论证链检查 Skill。')
+      option.click()
+    })()`)
     await waitFor("document.querySelectorAll('.composer-reference-chip').length === 1")
-    await setComposerValue('/arxiv')
-    await waitFor("document.querySelectorAll('.composer-slash-copy strong').length === 1")
-    await pressKey('Enter')
+    await setComposerValue('/search_papers')
+    await waitFor("[...document.querySelectorAll('.composer-slash-copy strong')].some((item) => item.textContent?.trim() === '/search_papers')")
+    await evaluate(`(() => {
+      const option = [...document.querySelectorAll('.composer-slash-group > button')]
+        .find((item) => item.querySelector('.composer-slash-copy strong')?.textContent?.trim() === '/search_papers')
+      if (!(option instanceof HTMLButtonElement)) throw new Error('未找到 search_papers 选项。')
+      option.click()
+    })()`)
     await waitFor("document.querySelectorAll('.composer-reference-chip').length === 2")
     const selected = await evaluate(`(() => ({
       chips: [...document.querySelectorAll('.composer-reference-chip > span')].map((item) => item.textContent?.trim()),
       value: document.querySelector('.composer textarea')?.value,
       menuOpen: Boolean(document.querySelector('.composer-slash-menu')),
     }))()`)
-    if (!selected.chips.includes('论证链检查') || !selected.chips.some((label) => label?.includes('arXiv'))) throw new Error('Skill/MCP 没有形成可见引用标签。')
+    if (!selected.chips.includes('论证链检查') || !selected.chips.some((label) => label?.includes('/search_papers') && label?.includes('arXiv'))) throw new Error('Skill/MCP 工具没有形成可见引用标签。')
     if (selected.value.includes('/') || selected.menuOpen) throw new Error('选择能力后没有清理 slash 查询或关闭菜单。')
     await capture(`${outputDir}/slash-selected-chips.png`)
 

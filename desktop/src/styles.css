@@ -1794,6 +1794,10 @@ select:focus-visible {
   color: var(--error);
 }
 
+.composer-slash-state.is-requires-input {
+  color: var(--text-secondary);
+}
+
 .composer-slash-empty {
   display: grid;
   min-height: 88px;
@@ -2254,6 +2258,10 @@ select:focus-visible {
   color: var(--text-secondary);
   background: var(--surface);
   font-size: calc(10px * var(--ui-font-scale, 1));
+}
+
+.composer-reference-chip.is-mcp-tool {
+  max-width: 280px;
 }
 
 .composer-reference-chip > span {

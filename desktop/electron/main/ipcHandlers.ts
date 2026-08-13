@@ -5,11 +5,14 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
 import type {
   AgentRun,
   AppearanceSettings,
+  ChatContextReference,
+  ChatStartInput,
   LiteratureRecord,
   McpResourceReadResult,
   McpServerConfig,
   McpToolCallResult,
   SystemPermissionKind,
+  WorkspaceState,
 } from '../../shared/contracts'
 import {
   appearancePatchFromThemeDocument,
@@ -22,8 +25,9 @@ import {
 } from '../../shared/defaultMcp'
 import { LiteratureService } from '../services/literature'
 import { createProviderAdapter } from '../services/providers'
+import { sanitizeMcpText } from '../services/pipeline/context'
 import { WorkspaceRepository } from '../services/storage/workspaceRepository'
-import { ChatCoordinator } from './chatCoordinator'
+import { ChatCoordinator, type ChatMcpToolPlan } from './chatCoordinator'
 import { extractConversationAttachment } from './attachments'
 import { ConfigurationService } from './configuration'
 import { toUserMessage } from './errors'
@@ -52,6 +56,184 @@ export interface McpTestResult {
   resources: McpServerConfig['resources']
 }
 
+interface PreparedSlashToolInput {
+  input: ChatStartInput
+  argumentTextByReference: Map<string, string>
+}
+
+function prepareSlashToolReferences(
+  state: WorkspaceState,
+  input: ChatStartInput,
+): PreparedSlashToolInput {
+  const references = [...(input.contextReferences ?? [])]
+  const argumentTextByReference = new Map<string, string>()
+  const direct = /^\/([A-Za-z0-9_.:-]+)(?:\s+([\s\S]*))?$/.exec(input.content.trim())
+
+  if (direct) {
+    const toolName = direct[1]
+    const selectedMatches = references
+      .filter((reference): reference is Extract<ChatContextReference, { kind: 'mcp-tool' }> => (
+        reference.kind === 'mcp-tool'
+        && reference.toolName.toLocaleLowerCase() === toolName.toLocaleLowerCase()
+      ))
+      .flatMap((reference) => {
+        const server = state.mcpServers.find((item) => item.id === reference.serverId && item.enabled)
+        const tool = server?.tools.find((item) => item.name === reference.toolName)
+        return server && tool ? [{ server, tool }] : []
+      })
+    const discoveredMatches = state.mcpServers
+      .filter((server) => server.enabled)
+      .flatMap((server) => server.tools
+        .filter((tool) => tool.name.toLocaleLowerCase() === toolName.toLocaleLowerCase())
+        .map((tool) => ({ server, tool })))
+    const matches = selectedMatches.length > 0 ? [selectedMatches[selectedMatches.length - 1]] : discoveredMatches
+    if (matches.length === 0) throw new Error(`没有找到已启用的 MCP 工具 /${toolName}。`)
+    if (matches.length > 1) throw new Error(`多个 MCP 服务提供 /${toolName}，请从“/”菜单选择具体服务。`)
+    const match = matches[0]
+    const reference: ChatContextReference = {
+      kind: 'mcp-tool',
+      serverId: match.server.id,
+      toolName: match.tool.name,
+    }
+    if (selectedMatches.length > 1) {
+      for (let index = references.length - 1; index >= 0; index -= 1) {
+        const item = references[index]
+        if (
+          item.kind === 'mcp-tool'
+          && item.toolName.toLocaleLowerCase() === toolName.toLocaleLowerCase()
+          && referenceIdentity(item) !== referenceIdentity(reference)
+        ) references.splice(index, 1)
+      }
+    }
+    if (!references.some((item) => referenceIdentity(item) === referenceIdentity(reference))) {
+      references.push(reference)
+    }
+    argumentTextByReference.set(referenceIdentity(reference), direct[2]?.trim() ?? '')
+  }
+
+  return {
+    input: { ...input, contextReferences: references },
+    argumentTextByReference,
+  }
+}
+
+function buildSlashMcpPlans(
+  input: ChatStartInput,
+  argumentTextByReference: Map<string, string>,
+  configuration: ConfigurationService,
+  callTool: IpcDependencies['callMcpTool'],
+): ChatMcpToolPlan[] {
+  const toolReferences = (input.contextReferences ?? [])
+    .filter((reference): reference is Extract<ChatContextReference, { kind: 'mcp-tool' }> => reference.kind === 'mcp-tool')
+  const unique = new Map(toolReferences.map((reference) => [referenceIdentity(reference), reference]))
+  if (unique.size > 3) throw new Error('单条消息最多执行 3 个 MCP 工具。')
+
+  const plans: ChatMcpToolPlan[] = []
+  for (const reference of unique.values()) {
+    const server = configuration.resolvedMcpServer(reference.serverId)
+    if (!server.enabled) throw new Error(`MCP 服务 ${server.name} 已停用。`)
+    const tool = server.tools.find((item) => item.name === reference.toolName)
+    if (!tool) throw new Error(`MCP 工具 ${reference.toolName} 不存在，请先重新测试服务。`)
+    const argumentText = argumentTextByReference.get(referenceIdentity(reference)) ?? input.content.trim()
+    const args = buildSlashToolArguments(server.id, tool.name, tool.inputSchema, argumentText)
+    plans.push({
+      serverId: server.id,
+      serverName: server.name,
+      toolName: tool.name,
+      arguments: args,
+      async execute(signal) {
+        const result = await callTool(server, tool.name, args, signal)
+        if (result.isError) {
+          throw new Error(`${server.name} / ${tool.name} 返回错误：${mcpResultSummary(result)}`)
+        }
+        return result
+      },
+    })
+  }
+  return plans
+}
+
+function buildSlashToolArguments(
+  serverId: string,
+  toolName: string,
+  inputSchema: Record<string, unknown> | undefined,
+  argumentText: string,
+): Record<string, unknown> {
+  const trimmed = argumentText.trim()
+  if (trimmed.startsWith('{')) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(trimmed)
+    } catch {
+      throw new Error(`/${toolName} 后的 JSON 参数无法解析。`)
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(`/${toolName} 的 JSON 参数必须是对象。`)
+    }
+    return parsed as Record<string, unknown>
+  }
+
+  if (serverId === DEFAULT_ARXIV_MCP_SERVER_ID) {
+    if (toolName === 'search_papers' || toolName === 'semantic_search') {
+      if (!trimmed) throw new Error(`请在 /${toolName} 后输入检索词。`)
+      return { query: trimmed, max_results: 5 }
+    }
+    if (toolName === 'download_paper' || toolName === 'read_paper' || toolName === 'citation_graph') {
+      const paperId = extractArxivPaperId(trimmed)
+      if (!paperId) throw new Error(`请在 /${toolName} 后输入 arXiv 论文 ID。`)
+      return { paper_id: paperId }
+    }
+    if (toolName === 'get_abstract' || toolName === 'get_paper_latex' || toolName === 'list_paper_latex_sections') {
+      const paperId = extractArxivPaperId(trimmed)
+      if (!paperId) throw new Error(`请在 /${toolName} 后输入 arXiv 论文 ID。`)
+      return { paper_id: paperId }
+    }
+    if (toolName === 'list_papers') return {}
+    if (toolName === 'watch_topic') {
+      if (!trimmed) throw new Error('请在 /watch_topic 后输入关注主题。')
+      return { topic: trimmed, max_results: 10 }
+    }
+    if (toolName === 'check_alerts') return trimmed ? { topic: trimmed } : {}
+    if (toolName === 'reindex') return {}
+  }
+
+  const properties = inputSchema?.properties
+  const propertyMap = properties && typeof properties === 'object' && !Array.isArray(properties)
+    ? properties as Record<string, unknown>
+    : {}
+  const required = Array.isArray(inputSchema?.required)
+    ? inputSchema.required.filter((item): item is string => typeof item === 'string')
+    : []
+  if (required.length === 0 && !trimmed) return {}
+  const preferred = ['query', 'topic', 'text', 'prompt', 'paper_id']
+    .find((name) => name in propertyMap && (required.length === 0 || required.includes(name)))
+  const soleRequired = required.length === 1 ? required[0] : undefined
+  const argumentName = preferred ?? soleRequired
+  if (argumentName && trimmed) {
+    return { [argumentName]: argumentName === 'paper_id' ? extractArxivPaperId(trimmed) ?? trimmed : trimmed }
+  }
+  throw new Error(`/${toolName} 需要结构化参数，请在命令后输入 JSON 对象。`)
+}
+
+function extractArxivPaperId(value: string): string | undefined {
+  return value.match(/(?:arxiv:\s*|arxiv\.org\/(?:abs|pdf)\/)?(\d{4}\.\d{4,5}(?:v\d+)?)/i)?.[1]
+}
+
+function referenceIdentity(reference: ChatContextReference): string {
+  if (reference.kind === 'skill') return `skill:${reference.skillId}`
+  if (reference.kind === 'mcp-tool') return `mcp-tool:${reference.serverId}:${reference.toolName}`
+  return `mcp:${reference.serverId}`
+}
+
+function mcpResultSummary(result: McpToolCallResult): string {
+  const text = result.content
+    .map((item) => item && typeof item === 'object' && !Array.isArray(item)
+      ? (item as Record<string, unknown>).text
+      : undefined)
+    .find((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+  return sanitizeMcpText(text ?? '工具未提供详细错误').replace(/\s+/g, ' ').slice(0, 500)
+}
+
 export interface IpcDependencies {
   rendererWebContentsId: number
   repository: WorkspaceRepository
@@ -67,6 +249,7 @@ export interface IpcDependencies {
     server: McpServerConfig,
     name: string,
     args: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<McpToolCallResult>
   readMcpResource(server: McpServerConfig, uri: string): Promise<McpResourceReadResult>
   disconnectMcp(serverId: string): Promise<void>
@@ -429,7 +612,15 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
   })
 
   handle(IPC.chatStart, async (event, payload) => {
-    return chat.start(chatStartSchema.parse(payload), event.sender)
+    const parsed = chatStartSchema.parse(payload)
+    const prepared = prepareSlashToolReferences(repository.snapshot(), parsed)
+    const mcpPlans = buildSlashMcpPlans(
+      prepared.input,
+      prepared.argumentTextByReference,
+      configuration,
+      dependencies.callMcpTool,
+    )
+    return chat.start(prepared.input, event.sender, mcpPlans)
   })
 
   handle(IPC.chatCancel, async (_event, runId: unknown) => {

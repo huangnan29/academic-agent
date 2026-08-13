@@ -170,6 +170,11 @@ export const chatStartSchema = z.object({
   contextReferences: z.array(z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('skill'), skillId: z.string().min(1).max(200) }).strict(),
     z.object({ kind: z.literal('mcp'), serverId: z.string().min(1).max(200) }).strict(),
+    z.object({
+      kind: z.literal('mcp-tool'),
+      serverId: z.string().min(1).max(200),
+      toolName: z.string().trim().min(1).max(256),
+    }).strict(),
   ])).max(12).optional(),
 }).strict()
 
