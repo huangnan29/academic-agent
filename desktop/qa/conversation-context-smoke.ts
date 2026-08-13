@@ -92,8 +92,30 @@ const state: WorkspaceState = {
   ],
   citations: [],
   runs: [],
-  mcpServers: [],
-  skills: [],
+  mcpServers: [{
+    id: 'mcp-smoke',
+    name: '本机文献 MCP',
+    transport: { type: 'stdio', command: 'node', args: [] },
+    enabled: true,
+    status: 'connected',
+    tools: [{ name: 'search_papers', description: '检索论文' }],
+    resources: [{ uri: 'paper://catalog', name: '论文目录' }],
+    origin: 'live',
+    verificationStatus: 'verified-metadata',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }],
+  skills: [{
+    id: 'skill-smoke',
+    name: '论证链检查',
+    description: '检查主张与证据关系',
+    instructions: '回答前先识别关键主张，再检查对应证据是否充分。',
+    enabled: true,
+    origin: 'live',
+    verificationStatus: 'unverified',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }],
   artifacts: [],
   settings: { activeProjectId: 'project-smoke', demoMode: false },
 }
@@ -138,6 +160,29 @@ if (system.includes('这是从绪论主稿同步得到的小节')) {
   throw new Error('项目对话重复注入了从主稿拆分的同步小节。')
 }
 
+const slashSystem = buildChatMessages(state, {
+  projectId: 'project-smoke',
+  conversationId: 'conversation-smoke',
+  content: '请结合所选能力检查研究方案。',
+  providerId: 'provider-smoke',
+  model: 'model-smoke',
+  contextScope: 'project',
+  contextReferences: [
+    { kind: 'skill', skillId: 'skill-smoke' },
+    { kind: 'mcp', serverId: 'mcp-smoke' },
+  ],
+})[0]?.content ?? ''
+for (const expected of [
+  '用户通过输入框“/”显式附加',
+  '已选 Skill：论证链检查',
+  '回答前先识别关键主张',
+  '已选 MCP：本机文献 MCP',
+  'search_papers',
+  '没有工具执行结果',
+]) {
+  if (!slashSystem.includes(expected)) throw new Error(`“/”上下文缺少：${expected}`)
+}
+
 process.stdout.write(`${JSON.stringify({
   ok: true,
   goalIncluded: true,
@@ -148,4 +193,7 @@ process.stdout.write(`${JSON.stringify({
   untrustedBoundaryIncluded: true,
   savedManuscriptIncluded: true,
   derivedSectionDeduplicated: true,
+  slashSkillIncluded: true,
+  slashMcpCapabilityIncluded: true,
+  mcpExecutionBoundaryIncluded: true,
 }, null, 2)}\n`)

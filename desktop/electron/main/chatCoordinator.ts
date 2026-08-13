@@ -38,6 +38,7 @@ export class ChatCoordinator {
       (item) => item.id === input.conversationId && item.projectId === input.projectId,
     )
     if (!project || !conversation) throw new Error('项目或对话不存在。')
+    validateContextReferences(stateBeforeMessage, input)
     if (conversation.accessMode === 'full') {
       const permissions = await this.systemPermissions.snapshot()
       if (!permissions.fullAccessReady) {
@@ -81,6 +82,7 @@ export class ChatCoordinator {
       content: input.content.trim(),
       status: 'completed',
       contextScope: input.contextScope,
+      contextReferences: input.contextReferences,
       origin: 'live',
       verificationStatus: 'unverified',
       createdAt: timestamp,
@@ -211,5 +213,20 @@ export class ChatCoordinator {
 
   private send(sender: WebContents, event: ChatStreamEvent): void {
     if (!sender.isDestroyed()) sender.send(IPC.chatEvent, event)
+  }
+}
+
+function validateContextReferences(
+  state: ReturnType<WorkspaceRepository['snapshot']>,
+  input: ChatStartInput,
+): void {
+  for (const reference of input.contextReferences ?? []) {
+    if (reference.kind === 'skill') {
+      const skill = state.skills.find((item) => item.id === reference.skillId)
+      if (!skill || !skill.enabled) throw new Error('所选 Skill 不存在或已停用，请重新选择。')
+      continue
+    }
+    const server = state.mcpServers.find((item) => item.id === reference.serverId)
+    if (!server || !server.enabled) throw new Error('所选 MCP 服务不存在或已停用，请重新选择。')
   }
 }

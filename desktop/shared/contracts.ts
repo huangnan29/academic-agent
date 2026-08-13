@@ -208,6 +208,14 @@ export interface SidebarPreferencesInput {
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
 export type MessageStatus = 'streaming' | 'completed' | 'cancelled' | 'error'
 
+/**
+ * 输入框通过“/”显式附加的应用内上下文引用。
+ * 渲染层只提交稳定 ID；主进程会从最新工作区解析名称和内容，避免伪造 Skill 或 MCP 能力。
+ */
+export type ChatContextReference =
+  | { kind: 'skill'; skillId: string }
+  | { kind: 'mcp'; serverId: string }
+
 export interface ChatMessage extends BaseEntity {
   projectId: string
   conversationId: string
@@ -219,6 +227,7 @@ export interface ChatMessage extends BaseEntity {
   providerId?: string
   model?: string
   contextScope?: 'project' | 'manuscript' | 'section' | 'selection'
+  contextReferences?: ChatContextReference[]
   runId?: string
   error?: string
 }
@@ -466,6 +475,7 @@ export interface ChatStartInput {
   model: string
   contextScope: 'project' | 'manuscript' | 'section' | 'selection'
   selectedText?: string
+  contextReferences?: ChatContextReference[]
 }
 
 export type ChatStreamEvent =

@@ -167,7 +167,11 @@ export const chatStartSchema = z.object({
   model: z.string().trim().min(1).max(200),
   contextScope: z.enum(['project', 'manuscript', 'section', 'selection']),
   selectedText: z.string().max(100000).optional(),
-})
+  contextReferences: z.array(z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('skill'), skillId: z.string().min(1).max(200) }).strict(),
+    z.object({ kind: z.literal('mcp'), serverId: z.string().min(1).max(200) }).strict(),
+  ])).max(12).optional(),
+}).strict()
 
 export const outlineGenerateSchema = z.object({
   projectId: z.string().min(1),

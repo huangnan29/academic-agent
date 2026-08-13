@@ -1456,6 +1456,7 @@ const fallbackApi: PaperAgentApi = {
         providerId: input.providerId,
         model: input.model,
         contextScope: input.contextScope,
+        contextReferences: input.contextReferences,
         origin: 'demo',
         verificationStatus: 'demo',
         createdAt,

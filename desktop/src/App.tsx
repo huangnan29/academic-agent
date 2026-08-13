@@ -81,6 +81,7 @@ import type {
   AgentStep,
   AppearanceSettings,
   AppearanceSettingsInput,
+  ChatContextReference,
   ChatMessage,
   Conversation,
   ConversationAccessMode,
@@ -1835,6 +1836,8 @@ function Composer({
   activeModel,
   conversation,
   attachments,
+  skills,
+  mcpServers,
   running,
   contextLabel,
   onSelectModel,
@@ -1852,10 +1855,12 @@ function Composer({
   activeModel?: string
   conversation?: Conversation
   attachments: ConversationAttachment[]
+  skills: SkillDefinition[]
+  mcpServers: McpServerConfig[]
   running: boolean
   contextLabel: string
   onSelectModel: (providerId: string, model: string) => void
-  onSend: (content: string) => void
+  onSend: (content: string, contextReferences: ChatContextReference[]) => Promise<boolean>
   onCancel: () => void
   onSettings: () => void
   onUpdateConversation: (input: ConversationUpdateInput) => Promise<void>
@@ -1865,21 +1870,111 @@ function Composer({
   onManagePermissions: () => void
 }) {
   const [value, setValue] = useState('')
+  const [cursorPosition, setCursorPosition] = useState(0)
+  const [selectedReferences, setSelectedReferences] = useState<ChatContextReference[]>([])
+  const [slashSelection, setSlashSelection] = useState(0)
+  const [slashDismissedValue, setSlashDismissedValue] = useState<string>()
+  const [submitting, setSubmitting] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [addMenuOpen, setAddMenuOpen] = useState(false)
   const [goalOpen, setGoalOpen] = useState(false)
   const [goalDraft, setGoalDraft] = useState(conversation?.goal ?? '')
   const [updatingMode, setUpdatingMode] = useState(false)
   const composingRef = useRef(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const addMenuRef = useRef<HTMLDivElement>(null)
-  const canSend = Boolean(value.trim() && activeProviderId && activeModel && !running)
+  const interactionLocked = running || submitting
+  const canSend = Boolean(value.trim() && activeProviderId && activeModel && !interactionLocked)
   const accessMode: ConversationAccessMode = conversation?.accessMode === 'full' ? 'full' : 'ask'
+
+  type SlashItem = {
+    key: string
+    label: string
+    description: string
+    searchText: string
+    reference: ChatContextReference
+    kind: 'skill' | 'mcp'
+    status?: McpServerConfig['status']
+    toolCount?: number
+  }
+
+  const slashItems = useMemo<SlashItem[]>(() => [
+    ...skills
+      .filter((skill) => skill.enabled)
+      .map((skill) => ({
+        key: `skill:${skill.id}`,
+        label: skill.name,
+        description: skill.description || '应用内 Skill',
+        searchText: `${skill.name} ${skill.description}`.toLocaleLowerCase(),
+        reference: { kind: 'skill' as const, skillId: skill.id },
+        kind: 'skill' as const,
+      })),
+    ...mcpServers
+      .filter((server) => server.enabled)
+      .map((server) => ({
+        key: `mcp:${server.id}`,
+        label: server.name,
+        description: server.status === 'connected'
+          ? `${server.tools.length} 个可用工具`
+          : server.status === 'failed'
+            ? '连接失败'
+            : server.status === 'connecting'
+              ? '正在连接'
+              : '尚未连接',
+        searchText: `${server.name} ${server.tools.map((tool) => `${tool.name} ${tool.description ?? ''}`).join(' ')}`.toLocaleLowerCase(),
+        reference: { kind: 'mcp' as const, serverId: server.id },
+        kind: 'mcp' as const,
+        status: server.status,
+        toolCount: server.tools.length,
+      })),
+  ], [mcpServers, skills])
+
+  const slashMatch = useMemo(() => {
+    const beforeCursor = value.slice(0, cursorPosition)
+    const match = /(?:^|\s)\/([^\s/]*)$/.exec(beforeCursor)
+    if (!match) return undefined
+    const slashIndex = match.index + (match[0].startsWith('/') ? 0 : 1)
+    let tokenEnd = cursorPosition
+    while (tokenEnd < value.length && !/\s/.test(value[tokenEnd])) tokenEnd += 1
+    return { query: match[1], slashIndex, tokenEnd }
+  }, [cursorPosition, value])
+
+  const filteredSlashItems = useMemo(() => {
+    const query = slashMatch?.query.trim().toLocaleLowerCase() ?? ''
+    return query ? slashItems.filter((item) => item.searchText.includes(query)) : slashItems
+  }, [slashItems, slashMatch?.query])
+  const slashMenuOpen = Boolean(slashMatch && slashDismissedValue !== value && !interactionLocked)
+
+  const referenceKey = (reference: ChatContextReference) => reference.kind === 'skill'
+    ? `skill:${reference.skillId}`
+    : `mcp:${reference.serverId}`
+
+  const referenceLabel = (reference: ChatContextReference) => {
+    const item = slashItems.find((candidate) => candidate.key === referenceKey(reference))
+    return item?.label ?? (reference.kind === 'skill' ? '已选择的 Skill' : '已选择的 MCP')
+  }
 
   useEffect(() => {
     setGoalDraft(conversation?.goal ?? '')
     setGoalOpen(false)
     setAddMenuOpen(false)
   }, [conversation?.id, conversation?.goal])
+
+  useEffect(() => {
+    setValue('')
+    setCursorPosition(0)
+    setSelectedReferences([])
+    setSlashDismissedValue(undefined)
+  }, [conversation?.id])
+
+  useEffect(() => {
+    setSlashSelection(0)
+  }, [slashMatch?.query, filteredSlashItems.length])
+
+  useEffect(() => {
+    if (!slashMenuOpen) return
+    document.getElementById(`composer-slash-option-${slashSelection}`)?.scrollIntoView({ block: 'nearest' })
+  }, [slashMenuOpen, slashSelection])
 
   useEffect(() => {
     if (!addMenuOpen) return
@@ -1897,10 +1992,49 @@ function Composer({
     }
   }, [addMenuOpen])
 
-  const submit = () => {
+  const removeSlashQuery = () => {
+    if (!slashMatch) return
+    const nextValue = `${value.slice(0, slashMatch.slashIndex)}${value.slice(slashMatch.tokenEnd)}`
+    const nextCursor = slashMatch.slashIndex
+    setValue(nextValue)
+    setCursorPosition(nextCursor)
+    setSlashDismissedValue(undefined)
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+      textareaRef.current?.setSelectionRange(nextCursor, nextCursor)
+    })
+  }
+
+  const selectSlashItem = (item: SlashItem) => {
+    const exists = selectedReferences.some((reference) => referenceKey(reference) === item.key)
+    if (!exists && selectedReferences.length >= 12) return
+    if (!exists) setSelectedReferences((current) => [...current, item.reference])
+    removeSlashQuery()
+  }
+
+  const submit = async () => {
     if (!canSend) return
-    onSend(value.trim())
+    const content = value.trim()
+    const contextReferences = [...selectedReferences]
     setValue('')
+    setCursorPosition(0)
+    setSlashDismissedValue(undefined)
+    setSubmitting(true)
+    try {
+      const sent = await onSend(content, contextReferences)
+      if (sent) {
+        setSelectedReferences([])
+      } else {
+        setValue(content)
+        setCursorPosition(content.length)
+        requestAnimationFrame(() => {
+          textareaRef.current?.focus()
+          textareaRef.current?.setSelectionRange(content.length, content.length)
+        })
+      }
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const togglePlanMode = async () => {
@@ -1935,6 +2069,66 @@ function Composer({
   return (
     <div className="composer-wrap">
       <div className="composer">
+        {slashMenuOpen && (
+          <div className="composer-slash-menu" id="composer-slash-menu" role="listbox" aria-label="添加 Skill 或 MCP 服务">
+            <div className="composer-slash-header">
+              <span>添加到本次对话</span>
+              <kbd>/</kbd>
+            </div>
+            {filteredSlashItems.length === 0 ? (
+              <div className="composer-slash-empty">没有匹配的已启用 Skill 或 MCP 服务</div>
+            ) : (
+              <div className="composer-slash-options">
+                {(['skill', 'mcp'] as const).map((kind) => {
+                  const group = filteredSlashItems.filter((item) => item.kind === kind)
+                  if (group.length === 0) return null
+                  return (
+                    <div className="composer-slash-group" key={kind} role="group" aria-label={kind === 'skill' ? 'Skills' : 'MCP 服务'}>
+                      <span className="composer-slash-group-label">{kind === 'skill' ? 'Skills' : 'MCP 服务'}</span>
+                      {group.map((item) => {
+                        const index = filteredSlashItems.findIndex((candidate) => candidate.key === item.key)
+                        const selected = index === slashSelection
+                        const alreadyAdded = selectedReferences.some((reference) => referenceKey(reference) === item.key)
+                        const unavailable = selectedReferences.length >= 12 && !alreadyAdded
+                        return (
+                          <button
+                            type="button"
+                            id={`composer-slash-option-${index}`}
+                            className={selected ? 'is-selected' : ''}
+                            role="option"
+                            aria-selected={selected}
+                            aria-disabled={unavailable}
+                            key={item.key}
+                            onMouseEnter={() => setSlashSelection(index)}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => selectSlashItem(item)}
+                          >
+                            <span className={`composer-slash-icon is-${item.kind}`} aria-hidden="true">
+                              {item.kind === 'skill' ? <Sparkles size={15} /> : <PlugZap size={15} />}
+                            </span>
+                            <span className="composer-slash-copy">
+                              <strong>{item.label}</strong>
+                              <small>{item.description}</small>
+                            </span>
+                            {alreadyAdded ? (
+                              <span className="composer-slash-state"><Check size={13} /> 已添加</span>
+                            ) : item.kind === 'mcp' ? (
+                              <span className={`composer-slash-state is-${item.status}`}>{item.toolCount} 工具</span>
+                            ) : null}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            <div className="composer-slash-footer">
+              <span>{selectedReferences.length}/12 已添加</span>
+              <span><kbd>↑↓</kbd> 选择 <kbd>Enter</kbd> 添加 <kbd>Esc</kbd> 关闭</span>
+            </div>
+          </div>
+        )}
         {attachments.length > 0 && (
           <div className="composer-attachments" aria-label="当前对话附件">
             {attachments.map((attachment) => (
@@ -1948,9 +2142,33 @@ function Composer({
             ))}
           </div>
         )}
+        {selectedReferences.length > 0 && (
+          <div className="composer-context-references" aria-label="本次对话附加能力">
+            {selectedReferences.map((reference) => (
+              <span className={`composer-reference-chip is-${reference.kind}`} key={referenceKey(reference)}>
+                {reference.kind === 'skill' ? <Sparkles size={13} /> : <PlugZap size={13} />}
+                <span>{referenceLabel(reference)}</span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedReferences((current) => current.filter((item) => referenceKey(item) !== referenceKey(reference)))}
+                  aria-label={`移除 ${referenceLabel(reference)}`}
+                  disabled={interactionLocked}
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <textarea
+          ref={textareaRef}
           value={value}
-          onChange={(event) => setValue(event.target.value)}
+          onChange={(event) => {
+            setValue(event.target.value)
+            setCursorPosition(event.target.selectionStart)
+            setSlashDismissedValue(undefined)
+          }}
+          onSelect={(event) => setCursorPosition(event.currentTarget.selectionStart)}
           onInput={(event) => {
             event.currentTarget.style.height = 'auto'
             event.currentTarget.style.height = `${Math.min(180, Math.max(82, event.currentTarget.scrollHeight))}px`
@@ -1962,14 +2180,40 @@ function Composer({
             composingRef.current = false
           }}
           onKeyDown={(event) => {
+            if (composingRef.current) return
+            if (slashMenuOpen) {
+              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault()
+                if (filteredSlashItems.length > 0) {
+                  const direction = event.key === 'ArrowDown' ? 1 : -1
+                  setSlashSelection((current) => (current + direction + filteredSlashItems.length) % filteredSlashItems.length)
+                }
+                return
+              }
+              if ((event.key === 'Enter' || event.key === 'Tab') && filteredSlashItems[slashSelection]) {
+                event.preventDefault()
+                selectSlashItem(filteredSlashItems[slashSelection])
+                return
+              }
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                setSlashDismissedValue(value)
+                return
+              }
+            }
             if (event.key === 'Enter' && !event.shiftKey && !composingRef.current) {
               event.preventDefault()
-              submit()
+              void submit()
             }
           }}
           placeholder="描述研究任务，或围绕当前文稿继续对话…"
           aria-label="向论文研究 Agent 提问"
-          disabled={running}
+          disabled={interactionLocked}
+          aria-expanded={slashMenuOpen}
+          aria-haspopup="listbox"
+          aria-controls={slashMenuOpen ? 'composer-slash-menu' : undefined}
+          aria-activedescendant={slashMenuOpen && filteredSlashItems[slashSelection] ? `composer-slash-option-${slashSelection}` : undefined}
+          aria-autocomplete="list"
         />
         <div className="composer-toolbar">
           <div className="composer-tools">
@@ -2030,7 +2274,7 @@ function Composer({
                 <Square size={14} fill="currentColor" />
               </button>
             ) : (
-              <button type="button" className="send-button" onClick={submit} disabled={!canSend} aria-label="发送消息">
+              <button type="button" className="send-button" onClick={() => void submit()} disabled={!canSend} aria-label="发送消息">
                 <ArrowUp size={18} />
               </button>
             )}
@@ -4381,8 +4625,8 @@ export function App() {
     }
   }
 
-  const sendMessage = async (content: string) => {
-    if (!activeProject || !conversation || !activeProviderId || !activeModel) return
+  const sendMessage = async (content: string, contextReferences: ChatContextReference[]): Promise<boolean> => {
+    if (!activeProject || !conversation || !activeProviderId || !activeModel) return false
     const contextScope = centerMode === 'manuscript' ? 'section' : 'project'
     if (centerMode === 'manuscript') setCenterMode('chat')
     const activeProvider = workspace.providers.find((item) => item.id === activeProviderId)
@@ -4397,6 +4641,7 @@ export function App() {
       providerId: activeProviderId,
       model: activeModel,
       contextScope,
+      contextReferences,
       origin: usesDemoProvider ? 'demo' : 'live',
       verificationStatus: usesDemoProvider ? 'demo' : 'unverified',
       createdAt: new Date().toISOString(),
@@ -4411,6 +4656,7 @@ export function App() {
         providerId: activeProviderId,
         model: activeModel,
         contextScope,
+        contextReferences,
       })
       setActiveRunId(result.runId)
       const persisted = await paperAgent.workspace.get()
@@ -4430,9 +4676,11 @@ export function App() {
         }
         return persisted
       })
+      return true
     } catch (error) {
       setWorkspace((current) => ({ ...current, messages: current.messages.filter((item) => item.id !== optimistic.id) }))
       showToast(error instanceof Error ? error.message : '无法开始生成', 'error')
+      return false
     }
   }
 
@@ -4685,6 +4933,8 @@ export function App() {
                   activeModel={activeModel}
                   conversation={conversation}
                   attachments={workspace.attachments.filter((item) => item.conversationId === conversation?.id)}
+                  skills={workspace.skills}
+                  mcpServers={workspace.mcpServers}
                   running={Boolean(activeRunId)}
                   contextLabel={centerMode === 'manuscript' ? '当前章节与项目上下文' : '项目与稿件上下文'}
                   onSelectModel={selectModel}

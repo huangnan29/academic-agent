@@ -379,4 +379,14 @@
 - 证据：`output/native-appearance-qa/appearance-system.png`、`appearance-dark-custom.png`、`appearance-light-custom.png`、`appearance-preferences-bottom.png`、`appearance-real-manuscript-diff.png`。
 - 边界：原生文件选择框的人工选择/取消未单独自动化；主进程文件选择、64KB 上限、严格解析和受限 IPC 已通过代码与运行检查。本轮未生成新 DMG。
 
+## 23. 输入框“/”能力选择器原生验收（2026-08-13）
+
+- 在原生 Electron 隔离工作区输入 `/`，菜单稳定显示在输入框上方，没有遮挡工具栏或超出 940px 高的窗口。
+- 菜单按 `Skills / MCP 服务` 分组，只显示应用内已启用能力；实测包含“论证链检查”和内置 arXiv MCP，MCP 行显示真实已发现工具数量与连接状态。
+- Enter 键可选择当前项，继续输入 `/arxiv` 能实时过滤并添加 MCP；选择后 slash 查询被清理，菜单关闭且生成两个独立可移除标签。
+- 重复选择同一 Skill 后标签数量仍为 2，去重生效；原生运行时错误为 0。
+- 后端上下文冒烟确认 Skill 指令、MCP 工具名和“没有工具执行结果”的安全边界均进入系统上下文。
+- 证据：`output/native-slash-menu-qa/slash-menu-groups.png`、`slash-selected-chips.png`。
+- 边界：本轮没有实际发起模型请求或 MCP 工具调用；验收证明的是能力选择、持久引用和上下文注入，不把能力发现冒充外部执行。
+
 final result: passed
