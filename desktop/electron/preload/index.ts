@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type {
+  AppearanceSettingsInput,
   ChatStartInput,
   ChatStreamEvent,
   ConversationUpdateInput,
@@ -25,6 +26,12 @@ const api = {
       ipcRenderer.invoke(IPC.workspaceSetActiveModel, providerId, model),
     setSidebarPreferences: (input: SidebarPreferencesInput) =>
       ipcRenderer.invoke(IPC.workspaceSetSidebarPreferences, input),
+  },
+  appearance: {
+    update: (input: AppearanceSettingsInput) =>
+      ipcRenderer.invoke(IPC.appearanceUpdate, input),
+    importTheme: () => ipcRenderer.invoke(IPC.appearanceImportTheme),
+    copyTheme: () => ipcRenderer.invoke(IPC.appearanceCopyTheme),
   },
   project: {
     create: (input: ResearchBrief) => ipcRenderer.invoke(IPC.projectCreate, input),

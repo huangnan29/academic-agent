@@ -1,15 +1,20 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, stat } from 'node:fs/promises'
+import { mkdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
 import type {
   AgentRun,
+  AppearanceSettings,
   LiteratureRecord,
   McpResourceReadResult,
   McpServerConfig,
   McpToolCallResult,
   SystemPermissionKind,
 } from '../../shared/contracts'
+import {
+  appearancePatchFromThemeDocument,
+  createAppearanceThemeDocument,
+} from '../../shared/appearance'
 import { IPC } from '../../shared/ipc'
 import {
   DEFAULT_ARXIV_MCP_SERVER_ID,
@@ -26,6 +31,8 @@ import { ExportCoordinator } from './exportCoordinator'
 import { PaperCoordinator } from './paperCoordinator'
 import {
   chatStartSchema,
+  appearanceSettingsInputSchema,
+  appearanceThemeDocumentSchema,
   conversationUpdateSchema,
   literatureSearchSchema,
   mcpServerInputSchema,
@@ -54,6 +61,7 @@ export interface IpcDependencies {
   exporter: ExportCoordinator
   literature: LiteratureService
   systemPermissions: SystemPermissionService
+  applyAppearance(appearance: AppearanceSettings): void | Promise<void>
   testMcp(server: McpServerConfig): Promise<McpTestResult>
   callMcpTool(
     server: McpServerConfig,
@@ -80,6 +88,50 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
 
   handle(IPC.workspaceSetSidebarPreferences, async (_event, payload: unknown) => {
     return repository.setSidebarPreferences(sidebarPreferencesSchema.parse(payload))
+  })
+
+  handle(IPC.appearanceUpdate, async (_event, payload: unknown) => {
+    const next = await repository.setAppearance(appearanceSettingsInputSchema.parse(payload))
+    await dependencies.applyAppearance(next.settings.appearance)
+    return next
+  })
+
+  handle(IPC.appearanceImportTheme, async (event) => {
+    const parent = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const options: Electron.OpenDialogOptions = {
+      title: '导入外观主题',
+      buttonLabel: '导入',
+      filters: [{ name: '学术 Agent 主题', extensions: ['json'] }],
+      properties: ['openFile'],
+      message: '仅导入由学术 Agent 复制的版本化 JSON 外观主题。',
+    }
+    const result = parent
+      ? await dialog.showOpenDialog(parent, options)
+      : await dialog.showOpenDialog(options)
+    if (result.canceled || !result.filePaths[0]) return repository.snapshot()
+
+    const selectedPath = result.filePaths[0]
+    const metadata = await stat(selectedPath)
+    if (!metadata.isFile() || metadata.size <= 0 || metadata.size > 64 * 1024) {
+      throw new Error('主题文件必须是小于 64 KB 的非空 JSON 文件。')
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(await readFile(selectedPath, 'utf8'))
+    } catch {
+      throw new Error('主题文件不是有效的 JSON。')
+    }
+    const document = appearanceThemeDocumentSchema.parse(parsed)
+    const next = await repository.setAppearance(appearancePatchFromThemeDocument(document))
+    await dependencies.applyAppearance(next.settings.appearance)
+    return next
+  })
+
+  handle(IPC.appearanceCopyTheme, () => {
+    const document = createAppearanceThemeDocument(repository.snapshot().settings.appearance)
+    const serialized = `${JSON.stringify(document, null, 2)}\n`
+    clipboard.writeText(serialized)
+    return serialized
   })
 
   handle(IPC.projectCreate, async (_event, payload) => {

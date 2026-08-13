@@ -1,23 +1,23 @@
 :root {
   color: oklch(0.22 0.015 35);
   background: oklch(1 0 0);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--ui-font-family, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   --background: oklch(1 0 0);
-  --surface: oklch(0.975 0.002 35);
-  --surface-strong: oklch(0.95 0.003 35);
-  --surface-hover: oklch(0.935 0.006 35);
-  --border: oklch(0.895 0.004 35);
-  --border-strong: oklch(0.81 0.008 35);
+  --surface: color-mix(in srgb, var(--background) 97%, var(--text));
+  --surface-strong: color-mix(in srgb, var(--background) 93%, var(--text));
+  --surface-hover: color-mix(in srgb, var(--background) 89%, var(--text));
+  --border: color-mix(in srgb, var(--background) 78%, var(--text));
+  --border-strong: color-mix(in srgb, var(--background) 64%, var(--text));
   --text: oklch(0.22 0.015 35);
-  --text-secondary: oklch(0.44 0.012 35);
-  --text-muted: oklch(0.57 0.009 35);
+  --text-secondary: color-mix(in srgb, var(--text) 72%, var(--background));
+  --text-muted: color-mix(in srgb, var(--text) 54%, var(--background));
   --brand: oklch(0.52 0.16 36);
-  --brand-hover: oklch(0.47 0.16 36);
-  --brand-soft: oklch(0.955 0.025 36);
-  --brand-border: oklch(0.855 0.08 36);
+  --brand-hover: color-mix(in srgb, var(--brand) 82%, var(--text));
+  --brand-soft: color-mix(in srgb, var(--brand) 12%, var(--background));
+  --brand-border: color-mix(in srgb, var(--brand) 38%, var(--background));
   --success: oklch(0.48 0.13 152);
   --success-soft: oklch(0.96 0.03 152);
   --warning: oklch(0.56 0.13 72);
@@ -34,6 +34,11 @@
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
+  --ui-font-scale: 1;
+  --shadow-color: color-mix(in srgb, var(--text) 22%, transparent);
+  --sidebar-background: var(--surface);
+  --diff-added: color-mix(in srgb, var(--success) 18%, var(--background));
+  --diff-removed: color-mix(in srgb, var(--error) 15%, var(--background));
 }
 
 * {
@@ -55,6 +60,36 @@ body {
   background: var(--background);
 }
 
+.app-shell {
+  color: var(--text);
+  font-family: var(--ui-font-family);
+  -webkit-font-smoothing: antialiased;
+}
+
+.app-shell[data-theme="dark"] {
+  --success: oklch(0.72 0.13 152);
+  --success-soft: color-mix(in srgb, var(--success) 13%, var(--background));
+  --warning: oklch(0.77 0.13 72);
+  --warning-soft: color-mix(in srgb, var(--warning) 13%, var(--background));
+  --error: oklch(0.72 0.16 27);
+  --error-soft: color-mix(in srgb, var(--error) 13%, var(--background));
+  --info: oklch(0.73 0.1 245);
+  --info-soft: color-mix(in srgb, var(--info) 13%, var(--background));
+}
+
+.app-shell[data-translucent-sidebar="on"] {
+  --sidebar-background: color-mix(in srgb, var(--surface) 72%, transparent);
+}
+
+.app-shell[data-translucent-sidebar="on"] .sidebar,
+.app-shell[data-translucent-sidebar="on"] .settings-sidebar {
+  backdrop-filter: blur(28px) saturate(1.25);
+}
+
+.app-shell[data-font-smoothing="off"] {
+  -webkit-font-smoothing: auto;
+}
+
 button,
 input,
 textarea,
@@ -67,7 +102,9 @@ button {
   border: 0;
 }
 
-button:not(:disabled) {
+.app-shell[data-pointer-cursor="on"] button:not(:disabled),
+.app-shell[data-pointer-cursor="on"] [role="button"],
+.app-shell[data-pointer-cursor="on"] a {
   cursor: pointer;
 }
 
@@ -143,6 +180,26 @@ select:focus-visible {
   animation: spin 0.9s linear infinite;
 }
 
+.app-shell[data-reduced-motion="on"] *,
+.app-shell[data-reduced-motion="on"] *::before,
+.app-shell[data-reduced-motion="on"] *::after {
+  scroll-behavior: auto !important;
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell[data-reduced-motion="system"] *,
+  .app-shell[data-reduced-motion="system"] *::before,
+  .app-shell[data-reduced-motion="system"] *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -157,7 +214,7 @@ select:focus-visible {
   min-width: 0;
   height: 100vh;
   border-right: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--sidebar-background);
   overflow: hidden;
 }
 
@@ -173,7 +230,7 @@ select:focus-visible {
   min-width: 0;
   height: 100vh;
   border-right: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--sidebar-background);
   overflow: hidden;
 }
 
@@ -196,7 +253,7 @@ select:focus-visible {
   border-radius: 7px;
   color: var(--text-secondary);
   background: transparent;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
 }
 
 .settings-back-button:hover,
@@ -240,7 +297,7 @@ select:focus-visible {
   border: 0;
   color: var(--text);
   background: transparent;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
 }
 
 .settings-search button {
@@ -273,7 +330,7 @@ select:focus-visible {
   margin: 0;
   padding: 0 8px 5px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   font-weight: 520;
 }
 
@@ -288,7 +345,7 @@ select:focus-visible {
   border-radius: 7px;
   color: var(--text-secondary);
   background: transparent;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   text-align: left;
 }
 
@@ -305,7 +362,7 @@ select:focus-visible {
 .settings-search-empty {
   margin: 22px 8px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   text-align: center;
 }
 
@@ -365,7 +422,7 @@ select:focus-visible {
   min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -400,7 +457,7 @@ select:focus-visible {
   border-radius: 8px;
   color: oklch(1 0 0);
   background: var(--brand);
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
   font-weight: 620;
 }
 
@@ -429,7 +486,7 @@ select:focus-visible {
   border-radius: 7px;
   color: var(--text-secondary);
   background: transparent;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
   text-align: left;
 }
 
@@ -460,7 +517,7 @@ select:focus-visible {
   justify-content: space-between;
   padding: 0 8px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   font-weight: 570;
 }
 
@@ -498,7 +555,7 @@ select:focus-visible {
 .sidebar-organize-menu .menu-heading {
   padding: 7px 9px 4px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   font-weight: 590;
 }
 
@@ -512,7 +569,7 @@ select:focus-visible {
   gap: 7px;
   padding: 0 8px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   text-align: left;
   white-space: nowrap;
   overflow: hidden;
@@ -595,7 +652,7 @@ select:focus-visible {
   padding: 0 3px 0 7px;
   color: inherit;
   background: transparent;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
   text-align: left;
 }
 
@@ -680,7 +737,7 @@ select:focus-visible {
   border-radius: 6px;
   color: var(--text-secondary);
   background: transparent;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   text-align: left;
 }
 
@@ -741,7 +798,7 @@ select:focus-visible {
   border-radius: 7px;
   color: var(--text-secondary);
   background: transparent !important;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   text-align: left;
 }
 
@@ -786,13 +843,13 @@ select:focus-visible {
 
 .research-conversation small {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .research-conversation-empty {
   padding: 7px 10px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .flat-conversation-list {
@@ -880,7 +937,7 @@ select:focus-visible {
   border-radius: 7px;
   color: var(--text);
   background: transparent;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
   text-align: left;
 }
 
@@ -937,7 +994,7 @@ select:focus-visible {
   gap: 7px;
   padding: 20px 22px 8px;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .conversation-rename-dialog input {
@@ -947,7 +1004,7 @@ select:focus-visible {
   border-radius: 8px;
   background: var(--background);
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
 }
 
 .conversation-rename-actions {
@@ -965,13 +1022,13 @@ select:focus-visible {
 }
 
 .flat-conversation strong {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   font-weight: 560;
 }
 
 .flat-conversation small {
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
 }
 
 @media (hover: none) {
@@ -996,13 +1053,13 @@ select:focus-visible {
 .sidebar-list button small {
   margin-left: auto;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .sidebar-empty {
   margin: 8px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
 }
 
 .sidebar-footer {
@@ -1024,7 +1081,7 @@ select:focus-visible {
   gap: 5px;
   padding-right: 7px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   white-space: nowrap;
 }
 
@@ -1086,14 +1143,14 @@ select:focus-visible {
 .workspace-title > span {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .workspace-title > strong {
   overflow: hidden;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
   font-weight: 590;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1138,7 +1195,7 @@ select:focus-visible {
   border-radius: 7px;
   color: var(--text-secondary);
   background: transparent;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
 }
 
 .view-switcher button.is-active,
@@ -1198,7 +1255,7 @@ select:focus-visible {
   gap: 7px;
   padding: 0 13px;
   border-radius: 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   font-weight: 590;
   white-space: nowrap;
 }
@@ -1280,7 +1337,7 @@ select:focus-visible {
   border-radius: 8px;
   color: var(--text-secondary);
   background: var(--surface-strong);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   font-weight: 600;
 }
 
@@ -1302,13 +1359,13 @@ select:focus-visible {
 }
 
 .message-meta strong {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   font-weight: 650;
 }
 
 .message-meta > span {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .message-meta .demo-text {
@@ -1333,7 +1390,7 @@ select:focus-visible {
   border-radius: 7px;
   cursor: pointer;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   font-weight: 590;
   list-style: none;
   user-select: none;
@@ -1368,7 +1425,7 @@ select:focus-visible {
   overflow: auto;
   border-left: 2px solid var(--border-strong);
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1383,7 +1440,7 @@ select:focus-visible {
 .markdown-body {
   max-width: 74ch;
   color: var(--text);
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
   line-height: 1.75;
   overflow-wrap: anywhere;
 }
@@ -1413,15 +1470,15 @@ select:focus-visible {
 }
 
 .markdown-body h1 {
-  font-size: 22px;
+  font-size: calc(22px * var(--ui-font-scale, 1));
 }
 
 .markdown-body h2 {
-  font-size: 18px;
+  font-size: calc(18px * var(--ui-font-scale, 1));
 }
 
 .markdown-body h3 {
-  font-size: 15px;
+  font-size: calc(15px * var(--ui-font-scale, 1));
 }
 
 .markdown-body ul,
@@ -1468,7 +1525,7 @@ select:focus-visible {
   gap: 5px;
   margin-top: 10px;
   color: var(--brand);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .message-actions {
@@ -1486,7 +1543,7 @@ select:focus-visible {
   border-radius: 6px;
   color: var(--text-muted);
   background: transparent;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .message-actions button:hover {
@@ -1532,12 +1589,12 @@ select:focus-visible {
 
 .empty-state strong {
   color: var(--text);
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
 }
 
 .empty-state p {
   margin: 8px 0 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   line-height: 1.6;
 }
 
@@ -1555,7 +1612,7 @@ select:focus-visible {
   border-radius: 6px;
   color: var(--brand);
   background: transparent;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .inline-link:hover {
@@ -1601,7 +1658,7 @@ select:focus-visible {
   border-radius: 20px 20px 0 0;
   color: var(--text);
   background: transparent;
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
   line-height: 1.55;
 }
 
@@ -1665,7 +1722,7 @@ select:focus-visible {
   margin: 6px auto 0;
   color: var(--brand);
   background: transparent;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .composer-add {
@@ -1703,7 +1760,7 @@ select:focus-visible {
   display: block;
   padding: 5px 10px 7px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   font-weight: 620;
 }
 
@@ -1733,13 +1790,13 @@ select:focus-visible {
 }
 
 .composer-add-menu strong {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   font-weight: 590;
 }
 
 .composer-add-menu small {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .access-picker {
@@ -1756,7 +1813,7 @@ select:focus-visible {
   border-radius: 8px;
   color: var(--text-secondary);
   background: transparent;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   white-space: nowrap;
 }
 
@@ -1787,7 +1844,7 @@ select:focus-visible {
   display: block;
   padding: 5px 10px 7px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   font-weight: 620;
 }
 
@@ -1824,13 +1881,13 @@ select:focus-visible {
 }
 
 .access-picker-menu strong {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   font-weight: 600;
 }
 
 .access-picker-menu small {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .access-picker-menu > p {
@@ -1838,7 +1895,7 @@ select:focus-visible {
   padding-top: 8px;
   border-top: 1px solid var(--border);
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
   line-height: 1.45;
 }
 
@@ -1862,7 +1919,7 @@ select:focus-visible {
   border-radius: 10px;
   color: var(--text-secondary);
   background: var(--warning-soft, oklch(0.97 0.025 75));
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   line-height: 1.45;
 }
 
@@ -1900,13 +1957,13 @@ select:focus-visible {
 }
 
 .system-permission-row strong {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   font-weight: 650;
 }
 
 .system-permission-row small {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   line-height: 1.45;
 }
 
@@ -1932,7 +1989,7 @@ select:focus-visible {
 .system-permission-label {
   min-width: 66px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   font-weight: 620;
   text-align: right;
 }
@@ -1944,12 +2001,12 @@ select:focus-visible {
 
 .system-permission-summary strong {
   color: var(--text);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .system-permission-summary small {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   line-height: 1.5;
 }
 
@@ -1989,7 +2046,7 @@ select:focus-visible {
   border-radius: 7px;
   color: var(--text-muted);
   background: transparent;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   white-space: nowrap;
 }
 
@@ -2022,7 +2079,7 @@ select:focus-visible {
   border-radius: 9px;
   color: var(--text-secondary);
   background: var(--surface);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .composer-attachment.has-warning {
@@ -2080,12 +2137,12 @@ select:focus-visible {
 }
 
 .composer-goal-dialog strong {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
 }
 
 .composer-goal-dialog small {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .composer-goal-dialog > textarea {
@@ -2097,7 +2154,7 @@ select:focus-visible {
   border-radius: 9px;
   color: var(--text);
   background: var(--surface);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   line-height: 1.55;
 }
 
@@ -2112,7 +2169,7 @@ select:focus-visible {
 .composer-goal-actions > span {
   margin-right: auto;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .model-picker {
@@ -2169,7 +2226,7 @@ select:focus-visible {
 
 .model-picker-label strong {
   color: var(--text);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   font-weight: 540;
 }
 
@@ -2196,7 +2253,7 @@ select:focus-visible {
 }
 
 .model-menu-head strong {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .model-menu-head button {
@@ -2220,7 +2277,7 @@ select:focus-visible {
   display: block;
   padding: 6px 8px 5px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .model-provider-group button {
@@ -2234,7 +2291,7 @@ select:focus-visible {
   border-radius: 6px;
   color: var(--text-secondary);
   background: transparent;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   text-align: left;
 }
 
@@ -2254,7 +2311,7 @@ select:focus-visible {
   border-top: 1px solid var(--border);
   color: var(--text-secondary);
   background: var(--surface);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .model-settings-link:hover {
@@ -2264,7 +2321,7 @@ select:focus-visible {
 .menu-empty {
   margin: 18px 8px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   text-align: center;
 }
 
@@ -2284,7 +2341,7 @@ select:focus-visible {
   gap: 16px;
   padding: 7px 22px;
   border-bottom: 1px solid var(--border);
-  background: oklch(1 0 0 / 0.96);
+  background: color-mix(in srgb, var(--background) 96%, transparent);
   backdrop-filter: blur(8px);
 }
 
@@ -2293,7 +2350,7 @@ select:focus-visible {
   align-items: center;
   gap: 11px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .manuscript-toolbar > div:first-child {
@@ -2322,7 +2379,7 @@ select:focus-visible {
   align-items: center;
   gap: 6px;
   color: var(--brand);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   font-weight: 580;
   white-space: nowrap;
 }
@@ -2344,7 +2401,7 @@ select:focus-visible {
 
 .manuscript-paper .markdown-body {
   max-width: 72ch;
-  font-size: 15px;
+  font-size: calc(15px * var(--ui-font-scale, 1));
   line-height: 1.85;
 }
 
@@ -2376,12 +2433,12 @@ select:focus-visible {
 }
 
 .section-generation-error strong {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .section-generation-error small {
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   line-height: 1.5;
 }
 
@@ -2399,7 +2456,7 @@ select:focus-visible {
   align-items: center;
   gap: 8px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .section-stream-caret {
@@ -2423,7 +2480,7 @@ select:focus-visible {
   47%, 100% { opacity: 0.15; }
 }
 
-.manuscript-paper > textarea {
+.manuscript-editor-stack > textarea {
   display: block;
   width: 100%;
   min-height: calc(100vh - 420px);
@@ -2433,8 +2490,89 @@ select:focus-visible {
   color: var(--text);
   background: transparent;
   font-family: inherit;
-  font-size: 15px;
+  font-size: calc(15px * var(--ui-font-scale, 1));
   line-height: 1.85;
+}
+
+.manuscript-editor-stack {
+  display: grid;
+  gap: 24px;
+}
+
+.manuscript-diff {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.manuscript-diff summary {
+  padding: 9px 11px;
+  color: var(--text-secondary);
+  font-size: calc(10px * var(--ui-font-scale, 1));
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.manuscript-diff-lines {
+  max-height: 240px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+}
+
+.manuscript-diff-lines > div {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  min-height: 24px;
+  align-items: start;
+  border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  font-size: calc(10px * var(--ui-font-scale, 1));
+  line-height: 1.5;
+}
+
+.manuscript-diff-lines > div:first-child {
+  border-top: 0;
+}
+
+.manuscript-diff-lines .is-added {
+  background: var(--diff-added);
+}
+
+.manuscript-diff-lines .is-removed {
+  background: var(--diff-removed);
+}
+
+.manuscript-diff-lines span {
+  min-height: 100%;
+  padding: 4px 6px;
+  color: var(--text-muted);
+  text-align: center;
+  user-select: none;
+}
+
+.manuscript-diff-lines code {
+  padding: 4px 8px;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-family: "SFMono-Regular", "SF Mono", Menlo, monospace;
+  white-space: pre-wrap;
+}
+
+.app-shell[data-diff-style="color"] .manuscript-diff-lines span {
+  font-size: 0;
+}
+
+.app-shell[data-diff-style="symbol"] .manuscript-diff-lines .is-added,
+.app-shell[data-diff-style="symbol"] .manuscript-diff-lines .is-removed {
+  background: var(--background);
+}
+
+.app-shell[data-diff-style="symbol"] .manuscript-diff-lines .is-added span {
+  color: var(--success);
+}
+
+.app-shell[data-diff-style="symbol"] .manuscript-diff-lines .is-removed span {
+  color: var(--error);
 }
 
 .status-badge {
@@ -2446,7 +2584,7 @@ select:focus-visible {
   border-radius: 999px;
   color: var(--text-secondary);
   background: var(--surface-strong);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
   line-height: 1.3;
   white-space: nowrap;
 }
@@ -2537,7 +2675,7 @@ body.is-resizing-panel {
 }
 
 .right-titlebar strong {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   font-weight: 620;
 }
 
@@ -2568,7 +2706,7 @@ body.is-resizing-panel {
   border-radius: 7px;
   color: var(--text-muted);
   background: transparent;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .right-tabs button > span {
@@ -2576,7 +2714,7 @@ body.is-resizing-panel {
   padding: 1px 4px;
   border-radius: 999px;
   background: var(--surface-strong);
-  font-size: 8px;
+  font-size: calc(8px * var(--ui-font-scale, 1));
 }
 
 .right-tabs button:hover {
@@ -2616,12 +2754,12 @@ body.is-resizing-panel {
 }
 
 .panel-summary strong {
-  font-size: 16px;
+  font-size: calc(16px * var(--ui-font-scale, 1));
 }
 
 .panel-summary span {
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
 }
 
 .literature-list {
@@ -2675,7 +2813,7 @@ body.is-resizing-panel {
 .literature-copy strong {
   display: -webkit-box;
   overflow: hidden;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   font-weight: 610;
   line-height: 1.4;
   -webkit-box-orient: vertical;
@@ -2686,7 +2824,7 @@ body.is-resizing-panel {
 .literature-copy small {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2708,7 +2846,7 @@ body.is-resizing-panel {
   border-radius: 6px;
   color: var(--brand);
   background: var(--brand-soft);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
 }
 
 .include-button.is-included {
@@ -2738,12 +2876,12 @@ body.is-resizing-panel {
 }
 
 .panel-section-heading strong {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .panel-section-heading span {
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
 }
 
 .outline-row,
@@ -2785,7 +2923,7 @@ body.is-resizing-panel {
 }
 
 .outline-row.is-level-1 strong {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   font-weight: 650;
 }
 
@@ -2860,7 +2998,7 @@ body.is-resizing-panel {
 .outline-row strong {
   display: -webkit-box;
   overflow: hidden;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   font-weight: 590;
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
@@ -2869,7 +3007,7 @@ body.is-resizing-panel {
 
 .artifact-row strong {
   overflow: hidden;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   font-weight: 590;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2878,7 +3016,7 @@ body.is-resizing-panel {
 .outline-row small,
 .artifact-row small {
   color: var(--text-muted);
-  font-size: 8px;
+  font-size: calc(8px * var(--ui-font-scale, 1));
 }
 
 .outline-row small {
@@ -2920,7 +3058,7 @@ body.is-resizing-panel {
 .inline-empty {
   margin: 3px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   line-height: 1.55;
 }
 
@@ -2941,13 +3079,13 @@ body.is-resizing-panel {
 
 .quality-note strong {
   color: var(--text);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .quality-note p {
   margin: 4px 0 0;
   color: var(--text-secondary);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
   line-height: 1.5;
 }
 
@@ -3006,13 +3144,13 @@ body.is-resizing-panel {
 .process-list strong {
   display: block;
   padding-top: 3px;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .process-list p {
   margin: 4px 0 0;
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
   line-height: 1.45;
 }
 
@@ -3038,7 +3176,7 @@ body.is-resizing-panel {
 .welcome-state h1 {
   max-width: 560px;
   margin: 0;
-  font-size: 26px;
+  font-size: calc(26px * var(--ui-font-scale, 1));
   letter-spacing: -0.025em;
   line-height: 1.3;
   text-wrap: balance;
@@ -3048,7 +3186,7 @@ body.is-resizing-panel {
   max-width: 540px;
   margin: 12px 0 22px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
   line-height: 1.6;
 }
 
@@ -3068,7 +3206,7 @@ body.is-resizing-panel {
   padding: 0 16px 0 22px;
   border-bottom: 1px solid var(--border);
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .route-page {
@@ -3090,13 +3228,13 @@ body.is-resizing-panel {
   display: block;
   margin-bottom: 4px;
   color: var(--brand);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   font-weight: 620;
 }
 
 .route-header h1 {
   margin: 0;
-  font-size: 21px;
+  font-size: calc(21px * var(--ui-font-scale, 1));
   letter-spacing: -0.02em;
 }
 
@@ -3104,7 +3242,7 @@ body.is-resizing-panel {
   max-width: 680px;
   margin: 7px 0 0;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   line-height: 1.55;
 }
 
@@ -3134,7 +3272,7 @@ body.is-resizing-panel {
   width: 100%;
   border: 0;
   background: transparent;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
 }
 
 .library-source-select {
@@ -3146,7 +3284,7 @@ body.is-resizing-panel {
   border-radius: 7px;
   color: var(--text-secondary);
   background: var(--surface);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3167,7 +3305,7 @@ body.is-resizing-panel {
 
 .library-toolbar > span {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .library-body {
@@ -3214,7 +3352,7 @@ body.is-resizing-panel {
 }
 
 .detail-panel-head strong {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .detail-panel-body {
@@ -3223,7 +3361,7 @@ body.is-resizing-panel {
 
 .detail-panel-body h2 {
   margin: 17px 0 20px;
-  font-size: 17px;
+  font-size: calc(17px * var(--ui-font-scale, 1));
   line-height: 1.45;
   text-wrap: balance;
 }
@@ -3245,13 +3383,13 @@ body.is-resizing-panel {
 
 .metadata-list dt {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .metadata-list dd {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
@@ -3265,13 +3403,13 @@ body.is-resizing-panel {
 .evidence-checklist h3,
 .capability-list h3 {
   margin: 0 0 9px;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .abstract-block p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   line-height: 1.72;
 }
 
@@ -3288,7 +3426,7 @@ body.is-resizing-panel {
   gap: 7px;
   margin: 8px 0 0;
   color: var(--success);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .evidence-checklist p.is-muted {
@@ -3321,14 +3459,14 @@ body.is-resizing-panel {
   display: block;
   margin-bottom: 5px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   font-weight: 560;
 }
 
 .settings-hub-header h1 {
   margin: 0;
   color: var(--text);
-  font-size: 24px;
+  font-size: calc(24px * var(--ui-font-scale, 1));
   font-weight: 660;
   letter-spacing: -0.025em;
 }
@@ -3337,7 +3475,7 @@ body.is-resizing-panel {
   max-width: 650px;
   margin: 8px 0 0;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   line-height: 1.6;
 }
 
@@ -3351,7 +3489,7 @@ body.is-resizing-panel {
 .settings-content-column > h2 {
   margin: 12px 0 0;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   font-weight: 640;
 }
 
@@ -3395,13 +3533,13 @@ body.is-resizing-panel {
 
 .settings-card-copy strong {
   color: var(--text);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   font-weight: 610;
 }
 
 .settings-card-copy small {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   line-height: 1.45;
 }
 
@@ -3411,7 +3549,7 @@ body.is-resizing-panel {
   color: var(--text-muted);
   background: var(--background);
   box-shadow: inset 0 0 0 1px var(--border);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
   white-space: nowrap;
 }
 
@@ -3424,7 +3562,7 @@ body.is-resizing-panel {
   border-radius: 10px;
   color: var(--text-muted);
   background: color-mix(in oklch, var(--surface) 65%, transparent);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   line-height: 1.55;
 }
 
@@ -3443,7 +3581,7 @@ body.is-resizing-panel {
   border-radius: 13px;
   color: var(--text-muted);
   background: var(--surface);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .snapshot-shortcut-preview kbd,
@@ -3459,14 +3597,14 @@ body.is-resizing-panel {
   color: var(--text);
   background: var(--background);
   font-family: inherit;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   box-shadow: 0 1px 1px oklch(0.2 0 0 / 0.04);
 }
 
 .snapshot-shortcut-preview kbd {
   width: 48px;
   height: 42px;
-  font-size: 19px;
+  font-size: calc(19px * var(--ui-font-scale, 1));
 }
 
 .shortcut-list .settings-card-row {
@@ -3514,11 +3652,11 @@ body.is-resizing-panel {
 
 .settings-empty-state strong {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
 }
 
 .settings-empty-state small {
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .settings-page {
@@ -3537,7 +3675,7 @@ body.is-resizing-panel {
 .skills-count {
   flex: 0 0 auto;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .skills-workbench {
@@ -3572,12 +3710,12 @@ body.is-resizing-panel {
 
 .skills-empty-list strong {
   color: inherit;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .skills-empty-list small {
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
 }
 
 .skill-enabled-state {
@@ -3615,12 +3753,12 @@ body.is-resizing-panel {
 
 .skill-isolation-note strong {
   color: var(--text);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .skill-isolation-note small {
   color: var(--text-secondary);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
   line-height: 1.5;
 }
 
@@ -3655,7 +3793,7 @@ body.is-resizing-panel {
   padding: 0 11px;
   color: var(--text-muted);
   background: transparent;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .settings-tabs button:hover,
@@ -3698,7 +3836,7 @@ body.is-resizing-panel {
 }
 
 .settings-list-head strong {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .settings-row {
@@ -3739,12 +3877,12 @@ body.is-resizing-panel {
 }
 
 .settings-row strong {
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .settings-row small {
   color: var(--text-muted);
-  font-size: 8px;
+  font-size: calc(8px * var(--ui-font-scale, 1));
 }
 
 .settings-row-icon {
@@ -3769,14 +3907,14 @@ body.is-resizing-panel {
 
 .settings-detail-head h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: calc(18px * var(--ui-font-scale, 1));
 }
 
 .settings-detail-head p {
   max-width: 570px;
   margin: 7px 0 0;
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   line-height: 1.55;
 }
 
@@ -3793,20 +3931,20 @@ body.is-resizing-panel {
 
 .field > span {
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   font-weight: 580;
 }
 
 .field > span b {
   color: var(--brand);
-  font-size: 8px;
+  font-size: calc(8px * var(--ui-font-scale, 1));
   font-weight: 600;
 }
 
 .field > span small {
   margin-left: 5px;
   color: var(--text-muted);
-  font-size: 8px;
+  font-size: calc(8px * var(--ui-font-scale, 1));
   font-weight: 400;
 }
 
@@ -3818,7 +3956,7 @@ body.is-resizing-panel {
   border-radius: 8px;
   color: var(--text);
   background: var(--background);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .field input,
@@ -3882,12 +4020,12 @@ body.is-resizing-panel {
 }
 
 .switch-row strong {
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 .switch-row small {
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
 }
 
 .credential-note {
@@ -3899,7 +4037,7 @@ body.is-resizing-panel {
   border-radius: 8px;
   color: var(--brand);
   background: var(--brand-soft);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
   line-height: 1.5;
 }
 
@@ -3951,12 +4089,12 @@ body.is-resizing-panel {
 
 .capability-list strong {
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
 }
 
 .capability-list small {
   color: var(--text-muted);
-  font-size: 8px;
+  font-size: calc(8px * var(--ui-font-scale, 1));
 }
 
 .capability-subheading {
@@ -3976,7 +4114,7 @@ body.is-resizing-panel {
   border-radius: 6px;
   color: var(--brand);
   background: var(--brand-soft);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
 }
 
 .capability-action:hover {
@@ -4005,7 +4143,7 @@ body.is-resizing-panel {
 
 .capability-runner label > span {
   color: var(--text-secondary);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
   font-weight: 580;
 }
 
@@ -4019,7 +4157,7 @@ body.is-resizing-panel {
   color: var(--text);
   background: var(--surface);
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
   line-height: 1.55;
 }
 
@@ -4061,7 +4199,7 @@ body.is-resizing-panel {
 }
 
 .capability-output strong {
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
 }
 
 .capability-output pre {
@@ -4071,7 +4209,7 @@ body.is-resizing-panel {
   overflow: auto;
   color: var(--text-secondary);
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -4100,13 +4238,13 @@ body.is-resizing-panel {
 }
 
 .local-setting-row strong {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
 .local-setting-row p {
   margin: 4px 0 0;
   color: var(--text-secondary);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
   line-height: 1.55;
 }
 
@@ -4161,14 +4299,14 @@ body.is-resizing-panel {
 
 .modal-header h2 {
   margin: 0;
-  font-size: 17px;
+  font-size: calc(17px * var(--ui-font-scale, 1));
 }
 
 .modal-header p {
   max-width: 510px;
   margin: 6px 0 0;
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   line-height: 1.5;
 }
 
@@ -4201,7 +4339,7 @@ body.is-resizing-panel {
   border-radius: 8px;
   color: var(--brand);
   background: var(--brand-soft);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
   line-height: 1.5;
 }
 
@@ -4236,14 +4374,14 @@ body.is-resizing-panel {
 
 .delete-project-impact strong,
 .delete-project-preserved strong {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
 }
 
 .delete-project-impact p,
 .delete-project-preserved p {
   margin: 5px 0 0;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   line-height: 1.55;
 }
 
@@ -4286,7 +4424,7 @@ body.is-resizing-panel {
   color: var(--text);
   background: var(--background);
   box-shadow: 0 6px 16px oklch(0.12 0 0 / 0.18);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   transform: translateX(-50%);
 }
 
@@ -4326,7 +4464,7 @@ body.is-resizing-panel {
   border-radius: 6px;
   color: var(--warning);
   background: oklch(0.985 0.017 72);
-  font-size: 8px;
+  font-size: calc(8px * var(--ui-font-scale, 1));
   pointer-events: none;
 }
 
@@ -4350,13 +4488,13 @@ body.is-resizing-panel {
 }
 
 .loading-screen strong {
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
 }
 
 .loading-screen span {
   margin-top: 6px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }
 
 @media (max-width: 1280px) {

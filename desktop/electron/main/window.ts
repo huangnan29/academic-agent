@@ -1,7 +1,8 @@
 import { isIP } from 'node:net'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, nativeImage, nativeTheme, shell } from 'electron'
+import type { AppearanceSettings } from '../../shared/contracts'
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url))
 
@@ -42,6 +43,34 @@ export function createMainWindow(): BrowserWindow {
   else void window.loadFile(join(currentDirectory, '../../dist/index.html'))
 
   return window
+}
+
+/**
+ * 仅应用已经持久化并经过 IPC schema 校验的外观值。
+ * Dock 图标只能来自应用包内资源或 macOS 内置图像，渲染层不能提供路径。
+ */
+export function applyNativeAppearance(
+  window: BrowserWindow,
+  appearance: AppearanceSettings,
+): void {
+  if (nativeTheme.themeSource !== appearance.theme) nativeTheme.themeSource = appearance.theme
+  const dark = appearance.theme === 'dark'
+    || (appearance.theme === 'system' && nativeTheme.shouldUseDarkColors)
+  const palette = dark ? appearance.palettes.dark : appearance.palettes.light
+  window.setBackgroundColor(palette.background)
+
+  if (process.platform === 'darwin') {
+    window.setVibrancy(appearance.translucentSidebar ? 'sidebar' : null)
+    applyDockIcon(appearance.dockIcon)
+  }
+}
+
+function applyDockIcon(dockIcon: AppearanceSettings['dockIcon']): void {
+  if (!app.dock) return
+  const image = dockIcon === 'assistant'
+    ? nativeImage.createFromPath(join(app.getAppPath(), 'build', 'dock-icon-dark.png'))
+    : nativeImage.createFromPath(join(app.getAppPath(), 'dist', 'icon.png'))
+  if (!image.isEmpty()) app.dock.setIcon(image)
 }
 
 export function isAllowedExternalUrl(value: string): boolean {

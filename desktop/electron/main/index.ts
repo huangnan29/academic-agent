@@ -1,11 +1,11 @@
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, Menu } from 'electron'
+import { app, BrowserWindow, dialog, Menu, nativeTheme } from 'electron'
 import { ChatCoordinator } from './chatCoordinator'
 import { ConfigurationService } from './configuration'
 import { ExportCoordinator } from './exportCoordinator'
 import { registerIpcHandlers } from './ipcHandlers'
 import { PaperCoordinator } from './paperCoordinator'
-import { createMainWindow } from './window'
+import { applyNativeAppearance, createMainWindow } from './window'
 import { LiteratureService } from '../services/literature'
 import { McpManager } from '../services/mcp'
 import { CredentialStore } from '../services/storage/credentialStore'
@@ -59,6 +59,10 @@ async function startApplication(): Promise<void> {
       exporter,
       literature,
       systemPermissions,
+      applyAppearance(appearance: Parameters<typeof applyNativeAppearance>[1]) {
+        if (!mainWindow || mainWindow.isDestroyed()) return
+        applyNativeAppearance(mainWindow, appearance)
+      },
       async testMcp(server: Parameters<typeof prepareMcpManager>[1]) {
         if (!mcpManager) throw new Error('MCP 管理器尚未初始化。')
         await prepareMcpManager(mcpManager, { ...server, enabled: true })
@@ -88,6 +92,7 @@ async function startApplication(): Promise<void> {
     const openWindow = () => {
       const createdWindow = createMainWindow()
       mainWindow = createdWindow
+      applyNativeAppearance(createdWindow, repository.snapshot().settings.appearance)
       dependencies.rendererWebContentsId = createdWindow.webContents.id
       registerIpcHandlers(dependencies)
       createdWindow.on('closed', () => {
@@ -102,6 +107,12 @@ async function startApplication(): Promise<void> {
     })
     installApplicationMenu()
     openWindow()
+    nativeTheme.on('updated', () => {
+      const appearance = repository.snapshot().settings.appearance
+      if (appearance.theme === 'system' && mainWindow && !mainWindow.isDestroyed()) {
+        applyNativeAppearance(mainWindow, appearance)
+      }
+    })
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) openWindow()
     })

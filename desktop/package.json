@@ -46,6 +46,7 @@
     },
     "files": [
       "dist/**/*",
+      "build/dock-icon-dark.png",
       "dist-electron/**/*",
       "package.json"
     ],

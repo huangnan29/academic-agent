@@ -368,4 +368,15 @@
 - 原生运行时错误为 0；没有启动 Chrome，也没有修改用户真实项目。
 - 证据：`output/native-arxiv-manuscript-polish/manuscript-bottom-and-green-outline.png`、`output/native-arxiv-manuscript-polish/library-default-arxiv-mcp.png`。
 
+## 22. Codex 式外观设置原生验收（2026-08-13）
+
+- 参考用户提供的 Codex 外观页，原生 Electron 安装结构下验证系统/浅色/深色三张主题卡、双调色板、主题预设、导入/复制、字体、半透明侧栏与对比度；控件完整且页面可独立滚动。
+- 深色自定义主题实际计算背景为 `rgb(24, 23, 22)`，浅色自定义主题为 `rgb(255, 250, 243)`；字体、指针、动态效果、字号和字体平滑均在应用根节点真实生效。
+- 底部偏好项包含 2 个 Dock 图标、3 种减少动态模式、12–20px 字号、2 种差异标记和字体平滑；没有以“计划中”按钮冒充完成。
+- 关闭并重新启动隔离的原生应用后，主题、字号、差异模式、指针、字体平滑、背景和字体均恢复。
+- 文稿编辑真实增加一行后，`+/-` 模式显示 `+` 标记且不依赖颜色背景；不是设置页演示状态。
+- 主题复制结果只含 `version/palettes/uiFont/translucentSidebar/contrast`；非法颜色和未知字段会被拒绝，个人偏好不会被主题导入覆盖。
+- 证据：`output/native-appearance-qa/appearance-system.png`、`appearance-dark-custom.png`、`appearance-light-custom.png`、`appearance-preferences-bottom.png`、`appearance-real-manuscript-diff.png`。
+- 边界：原生文件选择框的人工选择/取消未单独自动化；主进程文件选择、64KB 上限、严格解析和受限 IPC 已通过代码与运行检查。本轮未生成新 DMG。
+
 final result: passed

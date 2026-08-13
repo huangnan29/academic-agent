@@ -119,6 +119,81 @@ export interface ConversationAttachment extends BaseEntity {
 export type SidebarViewMode = 'projects' | 'list'
 export type SidebarChatSort = 'priority' | 'recent' | 'manual'
 
+export type AppearanceTheme = 'system' | 'light' | 'dark'
+export type AppearanceUiFont = 'system' | 'inter' | 'serif' | 'monospace'
+export type AppearanceDockIcon = 'academic' | 'assistant'
+export type AppearanceReducedMotion = 'system' | 'on' | 'off'
+export type AppearanceDiffStyle = 'color' | 'symbol'
+
+export interface AppearancePalette {
+  accent: string
+  background: string
+  foreground: string
+}
+
+/**
+ * 应用外观仅保存受控的枚举、颜色与数值，不接收 CSS、资源路径或可执行内容。
+ * 主进程与浏览器后备层共用同一份默认值，保证旧工作区升级后表现一致。
+ */
+export interface AppearanceSettings {
+  theme: AppearanceTheme
+  palettes: {
+    light: AppearancePalette
+    dark: AppearancePalette
+  }
+  uiFont: AppearanceUiFont
+  translucentSidebar: boolean
+  contrast: number
+  pointerCursor: boolean
+  dockIcon: AppearanceDockIcon
+  reducedMotion: AppearanceReducedMotion
+  uiFontSize: number
+  diffStyle: AppearanceDiffStyle
+  fontSmoothing: boolean
+}
+
+export type AppearanceSettingsInput = Omit<Partial<AppearanceSettings>, 'palettes'> & {
+  palettes?: {
+    light?: Partial<AppearancePalette>
+    dark?: Partial<AppearancePalette>
+  }
+}
+
+/** 复制与导入使用带版本号的纯 JSON 文档，便于以后安全迁移。 */
+export interface AppearanceThemeDocument {
+  version: 1
+  presetName?: string
+  palettes: AppearanceSettings['palettes']
+  uiFont: AppearanceUiFont
+  translucentSidebar: boolean
+  contrast: number
+}
+
+export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
+  theme: 'system',
+  palettes: {
+    light: {
+      accent: '#c43d1a',
+      background: '#ffffff',
+      foreground: '#24201f',
+    },
+    dark: {
+      accent: '#e8785c',
+      background: '#1e1e1e',
+      foreground: '#f1efee',
+    },
+  },
+  uiFont: 'system',
+  translucentSidebar: false,
+  contrast: 50,
+  pointerCursor: false,
+  dockIcon: 'academic',
+  reducedMotion: 'system',
+  uiFontSize: 14,
+  diffStyle: 'color',
+  fontSmoothing: true,
+}
+
 export interface SidebarPreferencesInput {
   viewMode?: SidebarViewMode
   chatSort?: SidebarChatSort
@@ -342,6 +417,29 @@ export interface Artifact extends BaseEntity {
   size: number
 }
 
+export interface WorkspaceSettings {
+  activeProjectId?: string
+  activeProviderId?: string
+  activeModel?: string
+  /** 后续新建研究的根目录；未设置时使用系统“文稿/学术 Agent”。 */
+  researchRootPath?: string
+  /** 左侧栏按项目树或单一对话列表显示。 */
+  sidebarViewMode?: SidebarViewMode
+  /** 对话与项目的排序规则。 */
+  sidebarChatSort?: SidebarChatSort
+  /** 独立持久化每个项目的展开状态，不与当前项目绑定。 */
+  sidebarExpandedProjectIds?: string[]
+  /** 是否在侧栏中显示已经归档的对话。 */
+  sidebarShowArchived?: boolean
+  /** 展开状态下由用户拖动保存的侧栏宽度。 */
+  sidebarWidth?: number
+  /** 展开状态下由用户拖动保存的右侧学术工作台宽度。 */
+  rightPanelWidth?: number
+  /** Codex 式外观与偏好设置；旧工作区由仓储层自动补齐默认值。 */
+  appearance: AppearanceSettings
+  demoMode: boolean
+}
+
 export interface WorkspaceState {
   schemaVersion: number
   projects: Project[]
@@ -357,26 +455,7 @@ export interface WorkspaceState {
   mcpServers: McpServerConfig[]
   skills: SkillDefinition[]
   artifacts: Artifact[]
-  settings: {
-    activeProjectId?: string
-    activeProviderId?: string
-    activeModel?: string
-    /** 后续新建研究的根目录；未设置时使用系统“文稿/学术 Agent”。 */
-    researchRootPath?: string
-    /** 左侧栏按项目树或单一对话列表显示。 */
-    sidebarViewMode?: SidebarViewMode
-    /** 对话与项目的排序规则。 */
-    sidebarChatSort?: SidebarChatSort
-    /** 独立持久化每个项目的展开状态，不与当前项目绑定。 */
-    sidebarExpandedProjectIds?: string[]
-    /** 是否在侧栏中显示已经归档的对话。 */
-    sidebarShowArchived?: boolean
-    /** 展开状态下由用户拖动保存的侧栏宽度。 */
-    sidebarWidth?: number
-    /** 展开状态下由用户拖动保存的右侧学术工作台宽度。 */
-    rightPanelWidth?: number
-    demoMode: boolean
-  }
+  settings: WorkspaceSettings
 }
 
 export interface ChatStartInput {

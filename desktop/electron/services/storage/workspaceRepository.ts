@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type {
   AgentRun,
+  AppearanceSettingsInput,
   Artifact,
   ChatMessage,
   CitationEvidence,
@@ -21,6 +22,10 @@ import type {
   SkillInput,
   WorkspaceState,
 } from '../../../shared/contracts'
+import {
+  mergeAppearanceSettings,
+  normalizeAppearanceSettings,
+} from '../../../shared/appearance'
 import {
   saveSectionContentInState,
   synchronizeDerivedSections,
@@ -212,6 +217,7 @@ function demoState(): WorkspaceState {
       sidebarViewMode: 'projects',
       sidebarChatSort: 'priority',
       sidebarExpandedProjectIds: [projectId],
+      appearance: normalizeAppearanceSettings(undefined),
       demoMode: true,
     },
   }
@@ -252,6 +258,7 @@ function normalizeState(candidate: Partial<WorkspaceState>): WorkspaceState {
     settings: {
       ...base.settings,
       ...(candidate.settings ?? {}),
+      appearance: normalizeAppearanceSettings(candidate.settings?.appearance),
     },
   }
   const activeProject = normalized.projects.find(
@@ -623,6 +630,13 @@ export class WorkspaceRepository {
           conversation.manualOrder = order.get(conversation.id) ?? input.conversationOrder!.length + index
         })
       }
+      return state
+    })
+  }
+
+  async setAppearance(input: AppearanceSettingsInput): Promise<WorkspaceState> {
+    return this.mutate((state) => {
+      state.settings.appearance = mergeAppearanceSettings(state.settings.appearance, input)
       return state
     })
   }

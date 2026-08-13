@@ -71,6 +71,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react'
@@ -78,6 +79,8 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type {
   AgentStep,
+  AppearanceSettings,
+  AppearanceSettingsInput,
   ChatMessage,
   Conversation,
   ConversationAccessMode,
@@ -97,12 +100,13 @@ import type {
   SystemPermissionSnapshot,
   WorkspaceState,
 } from '../shared/contracts'
-import { SKILL_LIMITS } from '../shared/contracts'
+import { DEFAULT_APPEARANCE_SETTINGS, SKILL_LIMITS } from '../shared/contracts'
 import {
   DEFAULT_ARXIV_MCP_SERVER_ID,
   DEFAULT_ARXIV_MCP_TOOL_NAME,
 } from '../shared/defaultMcp'
 import { isNativeBridge, paperAgent } from './fallback'
+import { AppearanceSettingsPage } from './AppearanceSettingsPage'
 import { OutlineTree } from './OutlineTree'
 
 type Route = 'workspace' | 'library' | 'skills' | 'settings'
@@ -127,6 +131,7 @@ type SettingsSection =
   | 'archived'
 
 const appIconUrl = new URL('../build/icon.png', import.meta.url).href
+const darkDockIconUrl = new URL('../build/dock-icon-dark.png', import.meta.url).href
 
 const verificationLabels: Record<LiteratureRecord['verificationStatus'], string> = {
   'verified-metadata': '元数据已核验',
@@ -161,7 +166,37 @@ const emptyWorkspace: WorkspaceState = {
   mcpServers: [],
   skills: [],
   artifacts: [],
-  settings: { demoMode: false },
+  settings: { appearance: DEFAULT_APPEARANCE_SETTINGS, demoMode: false },
+}
+
+const appearanceFontFamilies: Record<AppearanceSettings['uiFont'], string> = {
+  system: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif',
+  inter: '"Avenir Next", Avenir, "PingFang SC", sans-serif',
+  serif: '"New York", "Songti SC", "STSong", serif',
+  monospace: '"SFMono-Regular", "SF Mono", Menlo, Monaco, monospace',
+}
+
+function appearanceVariables(appearance: AppearanceSettings, prefersDark: boolean): CSSProperties {
+  const effectiveTheme = appearance.theme === 'system' ? (prefersDark ? 'dark' : 'light') : appearance.theme
+  const palette = appearance.palettes[effectiveTheme]
+  const contrastRatio = appearance.contrast / 100
+  const surfaceMix = 2 + contrastRatio * 4
+  const strongMix = 5 + contrastRatio * 7
+  const hoverMix = 8 + contrastRatio * 9
+  const borderMix = 12 + contrastRatio * 16
+  return {
+    '--background': palette.background,
+    '--text': palette.foreground,
+    '--brand': palette.accent,
+    '--surface': `color-mix(in srgb, ${palette.background} ${100 - surfaceMix}%, ${palette.foreground})`,
+    '--surface-strong': `color-mix(in srgb, ${palette.background} ${100 - strongMix}%, ${palette.foreground})`,
+    '--surface-hover': `color-mix(in srgb, ${palette.background} ${100 - hoverMix}%, ${palette.foreground})`,
+    '--border': `color-mix(in srgb, ${palette.background} ${100 - borderMix}%, ${palette.foreground})`,
+    '--border-strong': `color-mix(in srgb, ${palette.background} ${Math.max(45, 74 - contrastRatio * 24)}%, ${palette.foreground})`,
+    '--ui-font-family': appearanceFontFamilies[appearance.uiFont],
+    '--ui-font-scale': appearance.uiFontSize / 14,
+    '--appearance-contrast': appearance.contrast,
+  } as CSSProperties
 }
 
 function formatTime(value: string) {
@@ -176,6 +211,39 @@ function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+type ManuscriptDiffLine = { kind: 'same' | 'added' | 'removed'; text: string }
+
+/** 编辑时生成有界的逐行差异，避免大稿件让渲染线程承担无上限计算。 */
+function buildManuscriptDiff(original: string, next: string): ManuscriptDiffLine[] {
+  const left = original.split('\n').slice(0, 240)
+  const right = next.split('\n').slice(0, 240)
+  const table = Array.from({ length: left.length + 1 }, () => new Uint16Array(right.length + 1))
+  for (let i = left.length - 1; i >= 0; i -= 1) {
+    for (let j = right.length - 1; j >= 0; j -= 1) {
+      table[i][j] = left[i] === right[j]
+        ? table[i + 1][j + 1] + 1
+        : Math.max(table[i + 1][j], table[i][j + 1])
+    }
+  }
+  const lines: ManuscriptDiffLine[] = []
+  let i = 0
+  let j = 0
+  while (i < left.length && j < right.length) {
+    if (left[i] === right[j]) {
+      lines.push({ kind: 'same', text: left[i] })
+      i += 1
+      j += 1
+    } else if (table[i + 1][j] >= table[i][j + 1]) {
+      lines.push({ kind: 'removed', text: left[i++] })
+    } else {
+      lines.push({ kind: 'added', text: right[j++] })
+    }
+  }
+  while (i < left.length) lines.push({ kind: 'removed', text: left[i++] })
+  while (j < right.length) lines.push({ kind: 'added', text: right[j++] })
+  return lines
 }
 
 function IconButton({
@@ -1348,6 +1416,11 @@ function ManuscriptView({
   onConfigureModel: () => void
 }) {
   const streamTailRef = useRef<HTMLSpanElement>(null)
+  const manuscriptDiff = useMemo(
+    () => isEditing && section ? buildManuscriptDiff(section.content, draft) : [],
+    [draft, isEditing, section?.content],
+  )
+  const changedLines = manuscriptDiff.filter((line) => line.kind !== 'same')
 
   useEffect(() => {
     if (section?.status !== 'generating') return
@@ -1423,7 +1496,22 @@ function ManuscriptView({
           <div className="section-thinking-wrap"><ThinkingBlock content={section.reasoningContent} streaming={generating} /></div>
         )}
         {isEditing ? (
-          <textarea value={draft} onChange={(event) => onDraft(event.target.value)} aria-label="编辑当前章节" autoFocus />
+          <div className="manuscript-editor-stack">
+            <textarea value={draft} onChange={(event) => onDraft(event.target.value)} aria-label="编辑当前章节" autoFocus />
+            {changedLines.length > 0 && (
+              <details className="manuscript-diff" open>
+                <summary>本次修改 · 新增 {changedLines.filter((line) => line.kind === 'added').length} 行 · 删除 {changedLines.filter((line) => line.kind === 'removed').length} 行</summary>
+                <div className="manuscript-diff-lines" aria-label="当前章节未保存的逐行差异">
+                  {changedLines.slice(0, 120).map((line, index) => (
+                    <div className={`is-${line.kind}`} key={`${line.kind}-${index}-${line.text}`}>
+                      <span aria-hidden="true">{line.kind === 'added' ? '+' : '−'}</span>
+                      <code>{line.text || ' '}</code>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+          </div>
         ) : section.content || generating ? (
           <div className={`section-streaming-content${generating ? ' is-generating' : ''}`}>
             {section.content ? <MarkdownMessage content={section.content} /> : (
@@ -3386,6 +3474,9 @@ function SettingsPage({
   onManagePermissions,
   onChooseFolder,
   onOpenSkills,
+  onAppearanceChange,
+  onAppearanceImport,
+  onAppearanceCopy,
   onRestoreConversation,
   onRestoreAndOpen,
 }: {
@@ -3398,11 +3489,28 @@ function SettingsPage({
   onManagePermissions: () => void
   onChooseFolder: () => void
   onOpenSkills: () => void
+  onAppearanceChange: (input: AppearanceSettingsInput) => Promise<void>
+  onAppearanceImport: () => Promise<void>
+  onAppearanceCopy: () => Promise<void>
   onRestoreConversation: (conversationId: string) => Promise<void>
   onRestoreAndOpen: (projectId: string, conversationId: string) => Promise<void>
 }) {
   if (section === 'configuration') {
     return <ConfigurationSettings workspace={workspace} onRefresh={onRefresh} onToast={onToast} />
+  }
+
+  if (section === 'appearance') {
+    return (
+      <AppearanceSettingsPage
+        appearance={workspace.settings.appearance}
+        appIconUrl={appIconUrl}
+        darkDockIconUrl={darkDockIconUrl}
+        onChange={onAppearanceChange}
+        onImport={onAppearanceImport}
+        onCopy={onAppearanceCopy}
+        onToast={onToast}
+      />
+    )
   }
 
   if (section === 'archived') {
@@ -3513,8 +3621,7 @@ function SettingsPage({
   }
 
   const plannedAction = (name: string) => onToast(`${name}入口已经建立，系统能力将在后续版本接入`)
-  const plannedContent: Record<Exclude<SettingsSection, 'general' | 'configuration' | 'personalization' | 'shortcuts' | 'archived'>, Array<[LucideIcon, string, string]>> = {
-    appearance: [[Sparkles, '界面主题', '当前沿用经过验收的浅色界面；深色与跟随系统将在后续版本接入。']],
+  const plannedContent: Record<Exclude<SettingsSection, 'general' | 'appearance' | 'configuration' | 'personalization' | 'shortcuts' | 'archived'>, Array<[LucideIcon, string, string]>> = {
     voice: [[Mic, '语音转写', '入口已保留；麦克风授权、录音与本机转写尚未接入。']],
     'app-snapshot': [[Camera, '连续按两次 Command', '计划捕获当前应用窗口并作为本轮对话附件；当前不会监听全局键盘或截取屏幕。']],
     browser: [[ExternalLink, '受控浏览器', '计划由用户明确启动网页研究任务；当前不会读取浏览器历史或标签页。']],
@@ -3788,6 +3895,7 @@ export function App() {
   const [exporting, setExporting] = useState<'md' | 'docx'>()
   const [permissionCenterOpen, setPermissionCenterOpen] = useState(false)
   const [systemPermissions, setSystemPermissions] = useState<SystemPermissionSnapshot>()
+  const [prefersDark, setPrefersDark] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false)
   const [permissionBusy, setPermissionBusy] = useState(false)
   const [toast, setToast] = useState<{ message: string; tone: 'success' | 'error' }>()
   const settingsReturnRouteRef = useRef<Route>('workspace')
@@ -3818,6 +3926,14 @@ export function App() {
     paperAgent.systemPermissions.get()
       .then(setSystemPermissions)
       .catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const update = () => setPrefersDark(media.matches)
+    update()
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
   }, [])
 
   useEffect(() => {
@@ -4150,6 +4266,31 @@ export function App() {
     }
   }
 
+  const updateAppearance = async (input: AppearanceSettingsInput) => {
+    const next = await paperAgent.appearance.update(input)
+    setWorkspace(next)
+  }
+
+  const importAppearanceTheme = async () => {
+    try {
+      const before = JSON.stringify(workspace.settings.appearance)
+      const next = await paperAgent.appearance.importTheme()
+      setWorkspace(next)
+      showToast(JSON.stringify(next.settings.appearance) === before ? '已取消导入' : '主题已导入并立即应用')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '导入主题失败', 'error')
+    }
+  }
+
+  const copyAppearanceTheme = async () => {
+    try {
+      await paperAgent.appearance.copyTheme()
+      showToast('当前主题 JSON 已复制到剪贴板')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '复制主题失败', 'error')
+    }
+  }
+
   const createProject = async (brief: ResearchBrief) => {
     setCreatingProject(true)
     try {
@@ -4416,9 +4557,16 @@ export function App() {
   return (
     <main
       className={`app-shell${sidebarCollapsed && route !== 'settings' ? ' sidebar-collapsed' : ''}${rightOpen ? '' : ' right-collapsed'}${route === 'settings' ? ' settings-mode' : ''}`}
+      data-theme={workspace.settings.appearance.theme === 'system' ? (prefersDark ? 'dark' : 'light') : workspace.settings.appearance.theme}
+      data-pointer-cursor={workspace.settings.appearance.pointerCursor ? 'on' : 'off'}
+      data-reduced-motion={workspace.settings.appearance.reducedMotion}
+      data-font-smoothing={workspace.settings.appearance.fontSmoothing ? 'on' : 'off'}
+      data-translucent-sidebar={workspace.settings.appearance.translucentSidebar ? 'on' : 'off'}
+      data-diff-style={workspace.settings.appearance.diffStyle}
       style={{
         '--sidebar-width': `${sidebarWidth}px`,
         '--expanded-right-width': `${rightPanelWidth}px`,
+        ...appearanceVariables(workspace.settings.appearance, prefersDark),
       } as CSSProperties}
     >
       {route === 'settings' ? (
@@ -4622,6 +4770,9 @@ export function App() {
             }}
             onChooseFolder={chooseResearchFolder}
             onOpenSkills={() => setRoute('skills')}
+            onAppearanceChange={updateAppearance}
+            onAppearanceImport={importAppearanceTheme}
+            onAppearanceCopy={copyAppearanceTheme}
             onRestoreConversation={restoreConversation}
             onRestoreAndOpen={restoreAndOpenConversation}
           />

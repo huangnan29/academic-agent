@@ -1,4 +1,5 @@
 import type {
+  AppearanceSettingsInput,
   Artifact,
   ChatStartInput,
   ChatStreamEvent,
@@ -32,6 +33,12 @@ declare global {
         get(): Promise<WorkspaceState>
         setActiveModel(providerId: string, model: string): Promise<WorkspaceState>
         setSidebarPreferences(input: SidebarPreferencesInput): Promise<WorkspaceState>
+      }
+      appearance: {
+        update(input: AppearanceSettingsInput): Promise<WorkspaceState>
+        importTheme(): Promise<WorkspaceState>
+        /** 返回值就是已经写入系统剪贴板的版本化 JSON。 */
+        copyTheme(): Promise<string>
       }
       project: {
         create(input: Project['brief']): Promise<Project>

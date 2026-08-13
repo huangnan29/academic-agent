@@ -1,5 +1,6 @@
 import type {
   AgentRun,
+  AppearanceThemeDocument,
   ChatMessage,
   ChatStreamEvent,
   Conversation,
@@ -15,6 +16,13 @@ import type {
   WorkspaceState,
 } from '../shared/contracts'
 import { SKILL_LIMITS } from '../shared/contracts'
+import {
+  appearancePatchFromThemeDocument,
+  createAppearanceThemeDocument,
+  mergeAppearanceSettings,
+  normalizeAppearanceSettings,
+  parseAppearanceThemeDocument,
+} from '../shared/appearance'
 import {
   createDefaultArxivMcpServer,
   ensureDefaultArxivMcpServer,
@@ -673,6 +681,7 @@ const initialWorkspace = (): WorkspaceState => {
       sidebarViewMode: 'projects',
       sidebarChatSort: 'priority',
       sidebarExpandedProjectIds: [project.id],
+      appearance: normalizeAppearanceSettings(undefined),
       demoMode: true,
     },
   }
@@ -746,6 +755,7 @@ function readState(): WorkspaceState {
       skills: Array.isArray(parsed.skills) ? parsed.skills : [],
       settings: {
         ...parsed.settings,
+        appearance: normalizeAppearanceSettings(parsed.settings?.appearance),
         sidebarViewMode: parsed.settings?.sidebarViewMode === 'list' ? 'list' : 'projects',
         sidebarShowArchived: parsed.settings?.sidebarShowArchived === true,
         sidebarWidth: typeof parsed.settings?.sidebarWidth === 'number'
@@ -790,6 +800,54 @@ function mutate(mutator: (draft: WorkspaceState) => void): WorkspaceState {
   mutator(draft)
   writeState(draft)
   return draft
+}
+
+async function chooseBrowserThemeDocument(): Promise<AppearanceThemeDocument | undefined> {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'application/json,.json'
+  const file = await new Promise<File | undefined>((resolve) => {
+    let settled = false
+    const finish = (value?: File) => {
+      if (settled) return
+      settled = true
+      window.removeEventListener('focus', handleFocus)
+      input.remove()
+      resolve(value)
+    }
+    const handleFocus = () => window.setTimeout(() => finish(input.files?.[0]), 250)
+    input.addEventListener('change', () => finish(input.files?.[0]), { once: true })
+    window.addEventListener('focus', handleFocus, { once: true })
+    input.click()
+  })
+  if (!file) return undefined
+  if (file.size <= 0 || file.size > 64 * 1024) {
+    throw new Error('主题文件必须是小于 64 KB 的非空 JSON 文件。')
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(await file.text())
+  } catch {
+    throw new Error('主题文件不是有效的 JSON。')
+  }
+  return parseAppearanceThemeDocument(parsed)
+}
+
+async function copyTextInBrowser(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.append(textarea)
+  textarea.select()
+  const copied = document.execCommand('copy')
+  textarea.remove()
+  if (!copied) throw new Error('浏览器未允许写入剪贴板。')
 }
 
 function emit(event: ChatStreamEvent) {
@@ -841,6 +899,34 @@ const fallbackApi: PaperAgentApi = {
         }
       })
       return clone(next)
+    },
+  },
+  appearance: {
+    async update(input) {
+      const next = mutate((draft) => {
+        draft.settings.appearance = mergeAppearanceSettings(draft.settings.appearance, input)
+      })
+      return clone(next)
+    },
+    async importTheme() {
+      const document = await chooseBrowserThemeDocument()
+      if (!document) return clone(readState())
+      const next = mutate((draft) => {
+        draft.settings.appearance = mergeAppearanceSettings(
+          draft.settings.appearance,
+          appearancePatchFromThemeDocument(document),
+        )
+      })
+      return clone(next)
+    },
+    async copyTheme() {
+      const serialized = `${JSON.stringify(
+        createAppearanceThemeDocument(readState().settings.appearance),
+        null,
+        2,
+      )}\n`
+      await copyTextInBrowser(serialized)
+      return serialized
     },
   },
   project: {

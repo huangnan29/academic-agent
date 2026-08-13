@@ -33,6 +33,64 @@ export const sidebarPreferencesSchema = z.object({
   conversationOrder: z.array(z.string().min(1).max(200)).max(50_000).optional(),
 }).strict()
 
+const appearanceColorSchema = z.string().regex(
+  /^#[0-9a-f]{6}$/i,
+  '颜色必须使用 #RRGGBB 格式。',
+).transform((value) => value.toLowerCase())
+
+const appearancePaletteSchema = z.object({
+  accent: appearanceColorSchema,
+  background: appearanceColorSchema,
+  foreground: appearanceColorSchema,
+}).strict()
+
+export const appearanceSettingsSchema = z.object({
+  theme: z.enum(['system', 'light', 'dark']),
+  palettes: z.object({
+    light: appearancePaletteSchema,
+    dark: appearancePaletteSchema,
+  }).strict(),
+  uiFont: z.enum(['system', 'inter', 'serif', 'monospace']),
+  translucentSidebar: z.boolean(),
+  contrast: z.number().int().min(0).max(100),
+  pointerCursor: z.boolean(),
+  dockIcon: z.enum(['academic', 'assistant']),
+  reducedMotion: z.enum(['system', 'on', 'off']),
+  uiFontSize: z.number().int().min(12).max(20),
+  diffStyle: z.enum(['color', 'symbol']),
+  fontSmoothing: z.boolean(),
+}).strict()
+
+export const appearanceSettingsInputSchema = z.object({
+  theme: z.enum(['system', 'light', 'dark']).optional(),
+  palettes: z.object({
+    light: appearancePaletteSchema.partial().strict().optional(),
+    dark: appearancePaletteSchema.partial().strict().optional(),
+  }).strict().optional(),
+  uiFont: z.enum(['system', 'inter', 'serif', 'monospace']).optional(),
+  translucentSidebar: z.boolean().optional(),
+  contrast: z.number().int().min(0).max(100).optional(),
+  pointerCursor: z.boolean().optional(),
+  dockIcon: z.enum(['academic', 'assistant']).optional(),
+  reducedMotion: z.enum(['system', 'on', 'off']).optional(),
+  uiFontSize: z.number().int().min(12).max(20).optional(),
+  diffStyle: z.enum(['color', 'symbol']).optional(),
+  fontSmoothing: z.boolean().optional(),
+}).strict()
+
+/** 导入文件只接受应用自己复制出的版本化外观文档。 */
+export const appearanceThemeDocumentSchema = z.object({
+  version: z.literal(1),
+  presetName: z.string().trim().min(1).max(80).optional(),
+  palettes: z.object({
+    light: appearancePaletteSchema,
+    dark: appearancePaletteSchema,
+  }).strict(),
+  uiFont: z.enum(['system', 'inter', 'serif', 'monospace']),
+  translucentSidebar: z.boolean(),
+  contrast: z.number().int().min(0).max(100),
+}).strict()
+
 export const conversationUpdateSchema = z.object({
   conversationId: z.string().min(1).max(200),
   title: z.string().trim().min(1).max(120).optional(),
