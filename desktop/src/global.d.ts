@@ -1,11 +1,16 @@
 import type {
+  AppearanceSettingsInput,
   Artifact,
   ChatStartInput,
   ChatStreamEvent,
   ConversationUpdateInput,
   ExportFormat,
   LiteratureRecord,
+  LiteratureAddFromMessageInput,
+  LiteratureDeleteInput,
+  LiteratureSetProjectInput,
   LiteratureSearchInput,
+  ManuscriptSection,
   McpServerConfig,
   McpServerInput,
   McpResourceReadResult,
@@ -16,10 +21,16 @@ import type {
   ProviderInput,
   ProviderProfile,
   SectionGenerateInput,
+  SectionStreamEvent,
   SidebarPreferencesInput,
   SkillDefinition,
   SkillInput,
+  SystemPermissionKind,
+  SystemPermissionSnapshot,
   WorkspaceState,
+  VoiceInputEvent,
+  VoiceInputStartResult,
+  VoiceRecognitionStatus,
 } from '../shared/contracts'
 
 declare global {
@@ -29,6 +40,12 @@ declare global {
         get(): Promise<WorkspaceState>
         setActiveModel(providerId: string, model: string): Promise<WorkspaceState>
         setSidebarPreferences(input: SidebarPreferencesInput): Promise<WorkspaceState>
+      }
+      appearance: {
+        update(input: AppearanceSettingsInput): Promise<WorkspaceState>
+        importTheme(): Promise<WorkspaceState>
+        /** 返回值就是已经写入系统剪贴板的版本化 JSON。 */
+        copyTheme(): Promise<string>
       }
       project: {
         create(input: Project['brief']): Promise<Project>
@@ -44,6 +61,20 @@ declare global {
         update(input: ConversationUpdateInput): Promise<WorkspaceState>
         move(conversationId: string, targetProjectId: string): Promise<WorkspaceState>
         copyId(conversationId: string): Promise<void>
+        chooseAttachments(conversationId: string): Promise<WorkspaceState>
+        removeAttachment(attachmentId: string): Promise<WorkspaceState>
+      }
+      systemPermissions: {
+        get(): Promise<SystemPermissionSnapshot>
+        requestFullAccess(): Promise<SystemPermissionSnapshot>
+        requestMicrophone(): Promise<SystemPermissionSnapshot>
+        openSettings(kind: SystemPermissionKind): Promise<void>
+      }
+      voice: {
+        status(): Promise<VoiceRecognitionStatus>
+        start(): Promise<VoiceInputStartResult>
+        stop(sessionId: string): Promise<void>
+        onEvent(listener: (event: VoiceInputEvent) => void): () => void
       }
       provider: {
         save(input: ProviderInput): Promise<ProviderProfile>
@@ -53,6 +84,9 @@ declare global {
       literature: {
         search(input: LiteratureSearchInput): Promise<LiteratureRecord[]>
         toggle(projectId: string, literatureId: string, included: boolean): Promise<LiteratureRecord>
+        setProject(input: LiteratureSetProjectInput): Promise<LiteratureRecord>
+        delete(input: LiteratureDeleteInput): Promise<void>
+        addFromMessage(input: LiteratureAddFromMessageInput): Promise<LiteratureRecord[]>
       }
       outline: {
         generate(input: OutlineGenerateInput): Promise<OutlineNode[]>
@@ -62,6 +96,8 @@ declare global {
         generate(input: SectionGenerateInput): Promise<void>
         save(sectionId: string, content: string): Promise<void>
         setActive(sectionId: string): Promise<WorkspaceState>
+        selectVersion(sectionId: string, versionId: string): Promise<ManuscriptSection>
+        onEvent(listener: (event: SectionStreamEvent) => void): () => void
       }
       chat: {
         start(input: ChatStartInput): Promise<{ runId: string }>

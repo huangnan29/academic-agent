@@ -5,12 +5,13 @@ import {
   ChevronsUp,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
-import type { ManuscriptSection, OutlineNode } from '../shared/contracts'
+import type { ManuscriptSection, ManuscriptSectionVersion, OutlineNode } from '../shared/contracts'
 import './outline-tree.css'
 
 export interface OutlineTreeProps {
   nodes: OutlineNode[]
   sections: ManuscriptSection[]
+  sectionVersions: ManuscriptSectionVersion[]
   selectedSectionId?: string
   onSelectSection: (section: ManuscriptSection) => void
 }
@@ -169,7 +170,11 @@ function formatNumber(value: number): string {
   return Math.max(0, value).toLocaleString('zh-CN')
 }
 
-function getSectionMeta(section: ManuscriptSection | undefined, node: OutlineNode): string {
+function getSectionMeta(
+  section: ManuscriptSection | undefined,
+  node: OutlineNode,
+  activeVersion: ManuscriptSectionVersion | undefined,
+): string {
   if (!section) return '尚未创建文稿'
   const status = section.derivedFromSectionId && ['draft', 'verified'].includes(section.status)
     ? section.status === 'verified' ? '随父章同步 · 已核验' : '随父章同步'
@@ -177,7 +182,10 @@ function getSectionMeta(section: ManuscriptSection | undefined, node: OutlineNod
   const count = section.wordCount > 0
     ? `${formatNumber(section.wordCount)} 字`
     : node.targetWords > 0 ? `${formatNumber(node.targetWords)} 字目标` : ''
-  const version = section.wordCount > 0 && section.version > 1 ? `第 ${section.version} 版` : ''
+  // section.version 是内部修订计数；用户可见版本必须来自独立历史快照。
+  const version = section.wordCount > 0
+    ? activeVersion ? `第 ${activeVersion.number} 版` : '当前稿'
+    : ''
   return [status, count, version].filter(Boolean).join(' · ')
 }
 
@@ -189,6 +197,7 @@ interface OutlineBranchProps extends OutlineTreeProps {
   depth: number
   numberPrefix: number[]
   sectionByNodeId: Map<string, ManuscriptSection>
+  versionById: Map<string, ManuscriptSectionVersion>
   expandedIds: Set<string>
   onToggle: (nodeId: string) => void
 }
@@ -196,11 +205,13 @@ interface OutlineBranchProps extends OutlineTreeProps {
 function OutlineBranch({
   nodes,
   sections,
+  sectionVersions,
   selectedSectionId,
   onSelectSection,
   depth,
   numberPrefix,
   sectionByNodeId,
+  versionById,
   expandedIds,
   onToggle,
 }: OutlineBranchProps) {
@@ -214,8 +225,14 @@ function OutlineBranch({
         const hasChildren = children.length > 0
         const expanded = hasChildren && expandedIds.has(node.id)
         const selected = section?.id === selectedSectionId
+        const generated = Boolean(
+          section && ['draft', 'verified'].includes(section.status) && section.wordCount > 0,
+        )
         const childrenId = `academic-outline-children-${numberPath.join('-')}-${safeDomId(node.id)}`
-        const meta = getSectionMeta(section, node)
+        const activeVersion = section?.activeGenerationVersionId
+          ? versionById.get(section.activeGenerationVersionId)
+          : undefined
+        const meta = getSectionMeta(section, node, activeVersion)
 
         const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
           if (!hasChildren) return
@@ -264,7 +281,7 @@ function OutlineBranch({
                 onClick={() => section && onSelectSection(section)}
                 onKeyDown={handleKeyDown}
               >
-                <span className="academic-outline__number" aria-hidden="true">{heading.number}</span>
+                <span className={`academic-outline__number${generated ? ' is-generated' : ''}`} aria-hidden="true">{heading.number}</span>
                 <span className="academic-outline__copy">
                   <strong>{heading.title}</strong>
                   <small>{meta}</small>
@@ -276,11 +293,13 @@ function OutlineBranch({
                 <OutlineBranch
                   nodes={children}
                   sections={sections}
+                  sectionVersions={sectionVersions}
                   selectedSectionId={selectedSectionId}
                   onSelectSection={onSelectSection}
                   depth={depth + 1}
                   numberPrefix={numberPath}
                   sectionByNodeId={sectionByNodeId}
+                  versionById={versionById}
                   expandedIds={expandedIds}
                   onToggle={onToggle}
                 />
@@ -296,12 +315,17 @@ function OutlineBranch({
 export function OutlineTree({
   nodes,
   sections,
+  sectionVersions,
   selectedSectionId,
   onSelectSection,
 }: OutlineTreeProps) {
   const sectionByNodeId = useMemo(
     () => indexSections(sections, selectedSectionId),
     [sections, selectedSectionId],
+  )
+  const versionById = useMemo(
+    () => new Map(sectionVersions.map((version) => [version.id, version])),
+    [sectionVersions],
   )
   const selectedOutlineNodeId = sections.find((section) => section.id === selectedSectionId)?.outlineNodeId
   const selectedAncestorIds = useMemo(
@@ -363,11 +387,13 @@ export function OutlineTree({
         <OutlineBranch
           nodes={nodes}
           sections={sections}
+          sectionVersions={sectionVersions}
           selectedSectionId={selectedSectionId}
           onSelectSection={onSelectSection}
           depth={1}
           numberPrefix={[]}
           sectionByNodeId={sectionByNodeId}
+          versionById={versionById}
           expandedIds={expandedIds}
           onToggle={toggleNode}
         />

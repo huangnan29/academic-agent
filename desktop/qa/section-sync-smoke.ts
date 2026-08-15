@@ -132,16 +132,18 @@ function legacyState(): WorkspaceState {
         updatedAt: timestamp,
       },
     ],
+    attachments: [],
     messages: [],
     providers: [],
     literature: [],
     outlines: { [projectId]: outline },
-    sections: [
+  sections: [
       section('section-root', 'chapter-1', '第一章 绪论', 1, rootContent),
       section('section-child', 'chapter-1-1', '1.1 研究背景', 2),
       section('section-grandchild', 'chapter-1-1-1', '1.1.1 技术演进', 3),
       section('section-sibling', 'chapter-1-2', '1.2 研究意义', 2),
-    ],
+  ],
+  sectionVersions: [],
     citations: [],
     runs: [],
     mcpServers: [],
@@ -203,7 +205,16 @@ async function main() {
       targetSectionId: 'section-child',
     })
     assert.match(sectionContext, /这是原始背景内容/)
-    assert.doesNotMatch(sectionContext, /这是研究意义内容/)
+    assert.match(
+      sectionContext,
+      /这是研究意义内容/,
+      '当前章节对话仍应读取同一项目的完整已生成稿件背景',
+    )
+    assert.equal(
+      sectionContext.split('这是研究意义内容。').length - 1,
+      1,
+      '项目完整稿件中的同一兄弟章节不得重复注入',
+    )
     const manuscriptContext = buildPaperContext(state, projectId, { scope: 'manuscript' })
     assert.equal(
       manuscriptContext.split('这是技术演进内容。').length - 1,
@@ -230,6 +241,15 @@ async function main() {
       state.sections.find((item) => item.id === 'section-grandchild')?.content ?? '',
       /这是用户修改后的技术演进内容/,
     )
+    for (const synchronizedId of ['section-root', 'section-grandchild']) {
+      const synchronized = state.sections.find((item) => item.id === synchronizedId)
+      const activeVersion = state.sectionVersions.find(
+        (item) => item.id === synchronized?.activeGenerationVersionId,
+      )
+      assert.equal(activeVersion?.sectionId, synchronizedId)
+      assert.equal(activeVersion?.source, 'derived', '同步改写的父稿或子稿必须形成独立版本')
+      assert.equal(activeVersion?.content, synchronized?.content)
+    }
 
     await repository.updateSection('section-grandchild', {
       content: '#### 1.1.1 技术演进\n\n这是此前独立编辑的三级内容。',

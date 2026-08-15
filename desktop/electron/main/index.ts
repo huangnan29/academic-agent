@@ -1,15 +1,17 @@
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, Menu } from 'electron'
+import { app, BrowserWindow, dialog, Menu, nativeTheme } from 'electron'
 import { ChatCoordinator } from './chatCoordinator'
 import { ConfigurationService } from './configuration'
 import { ExportCoordinator } from './exportCoordinator'
 import { registerIpcHandlers } from './ipcHandlers'
 import { PaperCoordinator } from './paperCoordinator'
-import { createMainWindow } from './window'
+import { applyNativeAppearance, createMainWindow } from './window'
 import { LiteratureService } from '../services/literature'
 import { McpManager } from '../services/mcp'
 import { CredentialStore } from '../services/storage/credentialStore'
 import { WorkspaceRepository } from '../services/storage/workspaceRepository'
+import { SystemPermissionService } from './systemPermissions'
+import { VoiceInputService } from './voiceInput'
 
 const hasLock = app.requestSingleInstanceLock()
 if (!hasLock) app.quit()
@@ -17,6 +19,7 @@ if (!hasLock) app.quit()
 let mainWindow: BrowserWindow | null = null
 let chatCoordinator: ChatCoordinator | null = null
 let mcpManager: McpManager | null = null
+let voiceInputService: VoiceInputService | null = null
 let cleanupStarted = false
 let cleanupCompleted = false
 
@@ -41,11 +44,24 @@ async function startApplication(): Promise<void> {
     await Promise.all([repository.initialize(), credentials.initialize()])
 
     const configuration = new ConfigurationService(repository, credentials)
-    chatCoordinator = new ChatCoordinator(repository, configuration)
+    const systemPermissions = new SystemPermissionService()
+    const voiceInput = new VoiceInputService()
+    voiceInputService = voiceInput
+    chatCoordinator = new ChatCoordinator(repository, configuration, systemPermissions)
     const paperCoordinator = new PaperCoordinator(repository, configuration)
     const exporter = new ExportCoordinator(repository)
     const literature = new LiteratureService({ timeoutMs: 18_000 })
-    mcpManager = new McpManager([], { requestTimeoutMs: 15_000, maxListPages: 20 })
+    // arXiv MCP 首次通过 uvx 启动时可能需要准备本机缓存，给连接与检索保留合理时间。
+    mcpManager = new McpManager([], {
+      requestTimeoutMs: 60_000,
+      maxListPages: 20,
+      async onConfigChange(server) {
+        await repository.saveMcpServer(server)
+      },
+      async onConfigDelete(serverId) {
+        await repository.deleteMcpServer(serverId)
+      },
+    })
 
     const dependencies = {
       rendererWebContentsId: 0,
@@ -55,6 +71,12 @@ async function startApplication(): Promise<void> {
       paper: paperCoordinator,
       exporter,
       literature,
+      systemPermissions,
+      voiceInput,
+      applyAppearance(appearance: Parameters<typeof applyNativeAppearance>[1]) {
+        if (!mainWindow || mainWindow.isDestroyed()) return
+        applyNativeAppearance(mainWindow, appearance)
+      },
       async testMcp(server: Parameters<typeof prepareMcpManager>[1]) {
         if (!mcpManager) throw new Error('MCP 管理器尚未初始化。')
         await prepareMcpManager(mcpManager, { ...server, enabled: true })
@@ -65,10 +87,11 @@ async function startApplication(): Promise<void> {
         server: Parameters<typeof prepareMcpManager>[1],
         name: string,
         args: Record<string, unknown>,
+        signal?: AbortSignal,
       ) {
         if (!mcpManager) throw new Error('MCP 管理器尚未初始化。')
         await prepareMcpManager(mcpManager, server)
-        return mcpManager.callTool(server.id, name, args)
+        return mcpManager.callTool(server.id, name, args, signal)
       },
       async readMcpResource(server: Parameters<typeof prepareMcpManager>[1], uri: string) {
         if (!mcpManager) throw new Error('MCP 管理器尚未初始化。')
@@ -84,6 +107,7 @@ async function startApplication(): Promise<void> {
     const openWindow = () => {
       const createdWindow = createMainWindow()
       mainWindow = createdWindow
+      applyNativeAppearance(createdWindow, repository.snapshot().settings.appearance)
       dependencies.rendererWebContentsId = createdWindow.webContents.id
       registerIpcHandlers(dependencies)
       createdWindow.on('closed', () => {
@@ -98,6 +122,12 @@ async function startApplication(): Promise<void> {
     })
     installApplicationMenu()
     openWindow()
+    nativeTheme.on('updated', () => {
+      const appearance = repository.snapshot().settings.appearance
+      if (appearance.theme === 'system' && mainWindow && !mainWindow.isDestroyed()) {
+        applyNativeAppearance(mainWindow, appearance)
+      }
+    })
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) openWindow()
     })
@@ -114,7 +144,10 @@ app.on('before-quit', (event) => {
   if (cleanupStarted) return
   cleanupStarted = true
   chatCoordinator?.cancelAll()
-  void (mcpManager?.disconnectAll() ?? Promise.resolve())
+  void Promise.all([
+    voiceInputService?.stop() ?? Promise.resolve(),
+    mcpManager?.disconnectAll() ?? Promise.resolve(),
+  ])
     .catch(() => undefined)
     .finally(() => {
       cleanupCompleted = true

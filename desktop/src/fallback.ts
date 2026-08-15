@@ -1,18 +1,33 @@
 import type {
   AgentRun,
+  AppearanceThemeDocument,
   ChatMessage,
   ChatStreamEvent,
   Conversation,
   LiteratureRecord,
   ManuscriptSection,
+  ManuscriptSectionVersion,
   OutlineNode,
   Project,
   ProviderProfile,
+  SectionStreamEvent,
   SkillDefinition,
   SkillInput,
+  SystemPermissionSnapshot,
   WorkspaceState,
 } from '../shared/contracts'
 import { SKILL_LIMITS } from '../shared/contracts'
+import {
+  appearancePatchFromThemeDocument,
+  createAppearanceThemeDocument,
+  mergeAppearanceSettings,
+  normalizeAppearanceSettings,
+  parseAppearanceThemeDocument,
+} from '../shared/appearance'
+import {
+  createDefaultArxivMcpServer,
+  ensureDefaultArxivMcpServer,
+} from '../shared/defaultMcp'
 import {
   saveSectionContentInState,
   synchronizeDerivedSections,
@@ -20,10 +35,28 @@ import {
 
 type PaperAgentApi = Window['paperAgent']
 
+const unsupportedPermissions = (): SystemPermissionSnapshot => ({
+  platform: 'unsupported',
+  accessibility: 'unsupported',
+  fullDiskAccess: 'unsupported',
+  screenRecording: 'unsupported',
+  microphone: 'unsupported',
+  fullAccessReady: false,
+  checkedAt: now(),
+})
+
 const STORAGE_KEY = 'aiwritepaper-browser-demo-v1'
 
 const now = () => new Date().toISOString()
 const makeId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+function normalizeFallbackLiteratureTitle(value: string): string {
+  const normalized = value
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[\p{P}\p{S}\s]+/gu, '')
+  return normalized || value.normalize('NFKC').toLocaleLowerCase().trim()
+}
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
 function validateSkillInput(input: SkillInput): SkillInput {
@@ -517,6 +550,84 @@ function createSectionsFromOutline(
 
 const demoSections: ManuscriptSection[] = createSectionsFromOutline(demoOutline, 'project-demo', true)
 
+function makeSectionVersion(
+  state: WorkspaceState,
+  section: ManuscriptSection,
+  source: ManuscriptSectionVersion['source'],
+): ManuscriptSectionVersion {
+  const timestamp = now()
+  const latestNumber = state.sectionVersions
+    .filter((item) => item.sectionId === section.id)
+    .reduce((maximum, item) => Math.max(maximum, item.number), 0)
+  const version: ManuscriptSectionVersion = {
+    id: makeId('section-version'),
+    projectId: section.projectId,
+    sectionId: section.id,
+    number: latestNumber + 1,
+    source,
+    content: section.content,
+    wordCount: section.content.replace(/\s+/g, '').length,
+    status: source === 'partial' ? 'error' : section.status === 'verified' ? 'verified' : 'draft',
+    reasoningContent: section.reasoningContent,
+    generationProviderId: section.generationProviderId,
+    generationModel: section.generationModel,
+    thinkingRequested: section.thinkingRequested,
+    origin: section.origin,
+    verificationStatus: section.verificationStatus,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+  state.sectionVersions.push(version)
+  section.activeGenerationVersionId = version.id
+  return version
+}
+
+function normalizeFallbackSectionVersions(state: WorkspaceState): void {
+  state.sectionVersions = Array.isArray(state.sectionVersions) ? state.sectionVersions : []
+  for (const section of state.sections) {
+    if (section.status === 'generating') {
+      section.status = section.content.trim() ? 'draft' : 'pending'
+      section.generationError = '上次演示生成已中断，原稿已经保留。'
+    }
+    const versions = state.sectionVersions.filter((item) => item.sectionId === section.id)
+    if (versions.length === 0 && section.content.trim()) {
+      const migrated = makeSectionVersion(state, section, 'migrated')
+      migrated.createdAt = section.updatedAt
+      migrated.updatedAt = section.updatedAt
+    } else if (!versions.some((item) => item.id === section.activeGenerationVersionId)) {
+      section.activeGenerationVersionId = [...versions].reverse().find((item) => item.content === section.content)?.id
+    }
+  }
+}
+
+function preserveFallbackProjectVersions(state: WorkspaceState, projectId: string): Map<string, string> {
+  const previous = new Map<string, string>()
+  for (const section of state.sections) {
+    if (section.projectId !== projectId) continue
+    previous.set(section.id, section.content)
+    const active = state.sectionVersions.find((item) => item.id === section.activeGenerationVersionId)
+    if (section.content.trim() && active?.content !== section.content) makeSectionVersion(state, section, 'saved')
+  }
+  return previous
+}
+
+function recordFallbackDerivedVersions(
+  state: WorkspaceState,
+  projectId: string,
+  targetSectionId: string,
+  previous: Map<string, string>,
+): void {
+  for (const section of state.sections) {
+    if (
+      section.projectId !== projectId
+      || section.id === targetSectionId
+      || previous.get(section.id) === section.content
+    ) continue
+    if (section.content.trim()) makeSectionVersion(state, section, 'derived')
+    else section.activeGenerationVersionId = undefined
+  }
+}
+
 const initialWorkspace = (): WorkspaceState => {
   const project: Project = {
     id: 'project-demo',
@@ -622,14 +733,17 @@ const initialWorkspace = (): WorkspaceState => {
     schemaVersion: 1,
     projects: [project],
     conversations: [conversation],
+    attachments: [],
     messages,
     providers: [provider],
     literature: demoLiterature,
     outlines: { [project.id]: demoOutline },
     sections: demoSections,
+    sectionVersions: [],
     citations: [],
     runs: [run],
     mcpServers: [
+      createDefaultArxivMcpServer(now()),
       {
         id: 'mcp-demo',
         name: '公开文献门户（演示）',
@@ -656,6 +770,7 @@ const initialWorkspace = (): WorkspaceState => {
       sidebarViewMode: 'projects',
       sidebarChatSort: 'priority',
       sidebarExpandedProjectIds: [project.id],
+      appearance: normalizeAppearanceSettings(undefined),
       demoMode: true,
     },
   }
@@ -663,6 +778,7 @@ const initialWorkspace = (): WorkspaceState => {
 
 let memoryState: WorkspaceState | null = null
 const listeners = new Set<(event: ChatStreamEvent) => void>()
+const sectionListeners = new Set<(event: SectionStreamEvent) => void>()
 const chatTimers = new Map<string, number[]>()
 
 function restoreActiveModelIfNeeded(state: WorkspaceState) {
@@ -696,8 +812,10 @@ function migrateDefaultDemoOutline(state: WorkspaceState): WorkspaceState {
     ...migrated.sections.filter((section) => section.projectId !== 'project-demo'),
     ...clone(demoSections),
   ]
+  migrated.sectionVersions = migrated.sectionVersions.filter((item) => item.projectId !== 'project-demo')
   const migratedProject = migrated.projects.find((project) => project.id === 'project-demo')
   if (migratedProject) migratedProject.activeSectionId = demoSections[0]?.id
+  normalizeFallbackSectionVersions(migrated)
   return migrated
 }
 
@@ -719,14 +837,24 @@ function readState(): WorkspaceState {
         archived: conversation.archived === true,
         unread: conversation.unread === true,
         manualOrder: typeof conversation.manualOrder === 'number' ? conversation.manualOrder : index,
+        goal: typeof conversation.goal === 'string' ? conversation.goal : undefined,
+        planMode: conversation.planMode === true,
+        accessMode: conversation.accessMode === 'full' ? 'full' : 'ask',
       })),
+      attachments: Array.isArray(parsed.attachments) ? parsed.attachments : [],
+      sectionVersions: Array.isArray(parsed.sectionVersions) ? parsed.sectionVersions : [],
+      mcpServers: ensureDefaultArxivMcpServer(parsed.mcpServers ?? [], now()),
       skills: Array.isArray(parsed.skills) ? parsed.skills : [],
       settings: {
         ...parsed.settings,
+        appearance: normalizeAppearanceSettings(parsed.settings?.appearance),
         sidebarViewMode: parsed.settings?.sidebarViewMode === 'list' ? 'list' : 'projects',
         sidebarShowArchived: parsed.settings?.sidebarShowArchived === true,
         sidebarWidth: typeof parsed.settings?.sidebarWidth === 'number'
           ? Math.max(240, Math.min(520, Math.round(parsed.settings.sidebarWidth)))
+          : undefined,
+        rightPanelWidth: typeof parsed.settings?.rightPanelWidth === 'number'
+          ? Math.max(320, Math.min(620, Math.round(parsed.settings.rightPanelWidth)))
           : undefined,
         sidebarChatSort: ['priority', 'recent', 'manual'].includes(
           parsed.settings?.sidebarChatSort ?? '',
@@ -742,10 +870,12 @@ function readState(): WorkspaceState {
             : [],
       },
     }
+    normalizeFallbackSectionVersions(normalized)
     memoryState = migrateDefaultDemoOutline(normalized)
     synchronizeDerivedSections(memoryState)
   } catch {
     memoryState = initialWorkspace()
+    normalizeFallbackSectionVersions(memoryState)
   }
   return memoryState
 }
@@ -766,8 +896,60 @@ function mutate(mutator: (draft: WorkspaceState) => void): WorkspaceState {
   return draft
 }
 
+async function chooseBrowserThemeDocument(): Promise<AppearanceThemeDocument | undefined> {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'application/json,.json'
+  const file = await new Promise<File | undefined>((resolve) => {
+    let settled = false
+    const finish = (value?: File) => {
+      if (settled) return
+      settled = true
+      window.removeEventListener('focus', handleFocus)
+      input.remove()
+      resolve(value)
+    }
+    const handleFocus = () => window.setTimeout(() => finish(input.files?.[0]), 250)
+    input.addEventListener('change', () => finish(input.files?.[0]), { once: true })
+    window.addEventListener('focus', handleFocus, { once: true })
+    input.click()
+  })
+  if (!file) return undefined
+  if (file.size <= 0 || file.size > 64 * 1024) {
+    throw new Error('主题文件必须是小于 64 KB 的非空 JSON 文件。')
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(await file.text())
+  } catch {
+    throw new Error('主题文件不是有效的 JSON。')
+  }
+  return parseAppearanceThemeDocument(parsed)
+}
+
+async function copyTextInBrowser(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.append(textarea)
+  textarea.select()
+  const copied = document.execCommand('copy')
+  textarea.remove()
+  if (!copied) throw new Error('浏览器未允许写入剪贴板。')
+}
+
 function emit(event: ChatStreamEvent) {
   listeners.forEach((listener) => listener(event))
+}
+
+function emitSection(event: SectionStreamEvent) {
+  sectionListeners.forEach((listener) => listener(event))
 }
 
 const fallbackApi: PaperAgentApi = {
@@ -796,6 +978,7 @@ const fallbackApi: PaperAgentApi = {
         }
         if (input.showArchived !== undefined) draft.settings.sidebarShowArchived = input.showArchived
         if (input.sidebarWidth !== undefined) draft.settings.sidebarWidth = input.sidebarWidth
+        if (input.rightPanelWidth !== undefined) draft.settings.rightPanelWidth = input.rightPanelWidth
         if (input.projectOrder) {
           const order = new Map(input.projectOrder.map((id, index) => [id, index]))
           draft.projects.forEach((project, index) => {
@@ -810,6 +993,34 @@ const fallbackApi: PaperAgentApi = {
         }
       })
       return clone(next)
+    },
+  },
+  appearance: {
+    async update(input) {
+      const next = mutate((draft) => {
+        draft.settings.appearance = mergeAppearanceSettings(draft.settings.appearance, input)
+      })
+      return clone(next)
+    },
+    async importTheme() {
+      const document = await chooseBrowserThemeDocument()
+      if (!document) return clone(readState())
+      const next = mutate((draft) => {
+        draft.settings.appearance = mergeAppearanceSettings(
+          draft.settings.appearance,
+          appearancePatchFromThemeDocument(document),
+        )
+      })
+      return clone(next)
+    },
+    async copyTheme() {
+      const serialized = `${JSON.stringify(
+        createAppearanceThemeDocument(readState().settings.appearance),
+        null,
+        2,
+      )}\n`
+      await copyTextInBrowser(serialized)
+      return serialized
     },
   },
   project: {
@@ -893,11 +1104,15 @@ const fallbackApi: PaperAgentApi = {
         )
         draft.projects = draft.projects.filter((item) => item.id !== projectId)
         draft.conversations = draft.conversations.filter((item) => item.projectId !== projectId)
+        draft.attachments = draft.attachments.filter(
+          (item) => item.projectId !== projectId && !conversationIds.has(item.conversationId),
+        )
         draft.messages = draft.messages.filter(
           (item) => item.projectId !== projectId && !conversationIds.has(item.conversationId),
         )
         draft.literature = draft.literature.filter((item) => item.projectId !== projectId)
         draft.sections = draft.sections.filter((item) => item.projectId !== projectId)
+        draft.sectionVersions = draft.sectionVersions.filter((item) => item.projectId !== projectId)
         draft.citations = draft.citations.filter(
           (item) => item.projectId !== projectId && !sectionIds.has(item.sectionId),
         )
@@ -990,6 +1205,9 @@ const fallbackApi: PaperAgentApi = {
         if (input.title !== undefined) conversation.title = input.title.trim()
         if (input.pinned !== undefined) conversation.pinned = input.pinned
         if (input.unread !== undefined) conversation.unread = input.unread
+        if (input.goal !== undefined) conversation.goal = input.goal.trim() || undefined
+        if (input.planMode !== undefined) conversation.planMode = input.planMode
+        if (input.accessMode !== undefined) conversation.accessMode = input.accessMode
         if (input.archived !== undefined) {
           conversation.archived = input.archived
           if (input.archived && project.activeConversationId === conversation.id) {
@@ -1058,6 +1276,9 @@ const fallbackApi: PaperAgentApi = {
         draft.messages.forEach((message) => {
           if (message.conversationId === conversation.id) message.projectId = targetProject.id
         })
+        draft.attachments.forEach((attachment) => {
+          if (attachment.conversationId === conversation.id) attachment.projectId = targetProject.id
+        })
         targetProject.activeConversationId = conversation.id
         draft.settings.activeProjectId = targetProject.id
         draft.settings.sidebarExpandedProjectIds = [
@@ -1071,6 +1292,50 @@ const fallbackApi: PaperAgentApi = {
       const conversation = readState().conversations.find((item) => item.id === conversationId)
       if (!conversation) throw new Error('对话不存在或已经被移除')
       await navigator.clipboard.writeText(conversation.id)
+    },
+    async chooseAttachments() {
+      throw new Error('浏览器演示无法读取本机文件，请使用桌面应用。')
+    },
+    async removeAttachment(attachmentId) {
+      const next = mutate((draft) => {
+        if (!draft.attachments.some((item) => item.id === attachmentId)) {
+          throw new Error('附件不存在或已经移除')
+        }
+        draft.attachments = draft.attachments.filter((item) => item.id !== attachmentId)
+      })
+      return clone(next)
+    },
+  },
+  systemPermissions: {
+    async get() {
+      return unsupportedPermissions()
+    },
+    async requestFullAccess() {
+      return unsupportedPermissions()
+    },
+    async requestMicrophone() {
+      return unsupportedPermissions()
+    },
+    async openSettings() {
+      throw new Error('浏览器演示无法申请 macOS 系统权限，请使用桌面应用。')
+    },
+  },
+  voice: {
+    async status() {
+      return {
+        available: false,
+        authorization: 'unsupported' as const,
+        locale: 'zh-CN',
+        onDevice: false,
+        message: '浏览器演示不提供 macOS 原生语音识别。',
+      }
+    },
+    async start() {
+      throw new Error('浏览器演示无法使用 macOS 原生语音识别，请打开桌面应用。')
+    },
+    async stop() {},
+    onEvent() {
+      return () => undefined
     },
   },
   provider: {
@@ -1160,6 +1425,92 @@ const fallbackApi: PaperAgentApi = {
       if (!updated) throw new Error('未找到文献记录')
       return clone(updated)
     },
+    async setProject(input) {
+      let updated: LiteratureRecord | undefined
+      mutate((draft) => {
+        const target = draft.literature.find((item) => (
+          item.id === input.literatureId
+          && (
+            input.sourceProjectId === undefined
+            || (input.sourceProjectId === null ? item.projectId === undefined : item.projectId === input.sourceProjectId)
+          )
+        ))
+        if (!target) return
+        if (input.targetProjectId && !draft.projects.some((project) => project.id === input.targetProjectId)) {
+          throw new Error('目标项目不存在')
+        }
+        target.projectId = input.targetProjectId
+        target.included = false
+        target.updatedAt = now()
+        updated = target
+      })
+      if (!updated) throw new Error('未找到文献记录')
+      return clone(updated)
+    },
+    async delete(input) {
+      let removed = false
+      mutate((draft) => {
+        const index = draft.literature.findIndex((item) => (
+          item.id === input.literatureId
+          && (
+            input.sourceProjectId === undefined
+            || (input.sourceProjectId === null ? item.projectId === undefined : item.projectId === input.sourceProjectId)
+          )
+        ))
+        if (index < 0) return
+        const record = draft.literature[index]
+        const referenced = Boolean(record.projectId) && (
+          draft.citations.some((citation) => citation.projectId === record.projectId && citation.literatureId === record.id)
+          || flattenOutline(draft.outlines[record.projectId!] ?? []).some((node) => node.citationIds.includes(record.id))
+          || draft.sections.some((section) => (
+            section.projectId === record.projectId
+            && (
+              section.content.includes(`【文献:${record.id}】`)
+              || section.content.includes(`【文献：${record.id}】`)
+              || section.content.includes(`[cite:${record.id}]`)
+              || section.content.includes(`[@${record.id}]`)
+            )
+          ))
+        )
+        if (referenced) throw new Error('该文献仍被大纲或正文引用，请先移除对应引用后再删除。')
+        draft.literature.splice(index, 1)
+        removed = true
+      })
+      if (!removed) throw new Error('未找到文献记录')
+    },
+    async addFromMessage(input) {
+      const added: LiteratureRecord[] = []
+      mutate((draft) => {
+        const message = draft.messages.find((item) => item.id === input.messageId && item.role === 'assistant')
+        if (!message) throw new Error('未找到助手消息')
+        for (const candidateId of [...new Set(input.candidateIds)]) {
+          const candidate = message.literatureCandidates?.find((item) => item.id === candidateId)
+          if (!candidate) throw new Error('所选文献不属于这条消息')
+          const existing = draft.literature.find((item) => (
+            item.projectId === message.projectId
+            && normalizeFallbackLiteratureTitle(item.title) === normalizeFallbackLiteratureTitle(candidate.title)
+          ))
+          if (existing) {
+            added.push(existing)
+            continue
+          }
+          const timestamp = now()
+          const record: LiteratureRecord = {
+            ...candidate,
+            id: makeId('literature'),
+            projectId: message.projectId,
+            included: false,
+            origin: 'demo',
+            verificationStatus: 'demo',
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          }
+          draft.literature.push(record)
+          added.push(record)
+        }
+      })
+      return clone(added)
+    },
   },
   outline: {
     async generate(input) {
@@ -1167,6 +1518,7 @@ const fallbackApi: PaperAgentApi = {
       mutate((draft) => {
         draft.outlines[input.projectId] = generated
         draft.sections = draft.sections.filter((item) => item.projectId !== input.projectId)
+        draft.sectionVersions = draft.sectionVersions.filter((item) => item.projectId !== input.projectId)
         draft.sections.push(...createSectionsFromOutline(generated, input.projectId))
         const project = draft.projects.find((item) => item.id === input.projectId)
         if (project) {
@@ -1193,14 +1545,24 @@ const fallbackApi: PaperAgentApi = {
       )
       const outlineNodeId = sourceSection?.outlineNodeId ?? input.sectionId
       const target = findOutlineNode(outline, outlineNodeId)
+      const provider = readState().providers.find((item) => item.id === input.providerId)
+      const runId = makeId('section-run')
+      const fullContent = sourceSection
+        ? `## ${sourceSection.title}\n\n这是根据当前大纲生成的浏览器演示章节。真实应用会使用所选模型和已纳入文献逐段写作，并在右侧标记引用证据的核验状态。\n\n当前结果未连接真实模型与文献门户，不可作为正式论文内容。`
+        : target
+          ? `## ${target.title}\n\n这是浏览器演示章节，尚未调用真实模型。`
+          : ''
       mutate((draft) => {
         const existing = draft.sections.find(
           (item) => item.id === input.sectionId || item.outlineNodeId === input.sectionId,
         )
         if (existing) {
-          existing.status = 'draft'
-          existing.content = `## ${existing.title}\n\n这是根据当前大纲生成的浏览器演示章节。真实应用会使用所选模型和已纳入文献逐段写作，并在右侧标记引用证据的核验状态。\n\n当前结果未连接真实模型与文献门户，不可作为正式论文内容。`
-          existing.wordCount = 86
+          preserveFallbackProjectVersions(draft, existing.projectId)
+          existing.status = 'generating'
+          existing.generationError = undefined
+          existing.generationProviderId = input.providerId
+          existing.generationModel = input.model
+          existing.thinkingRequested = false
           existing.updatedAt = now()
         } else if (target) {
           draft.sections.push({
@@ -1209,22 +1571,60 @@ const fallbackApi: PaperAgentApi = {
             outlineNodeId,
             title: target.title,
             level: target.level,
-            content: `## ${target.title}\n\n这是浏览器演示章节，尚未调用真实模型。`,
-            status: 'draft',
-            wordCount: 28,
+            content: '',
+            status: 'generating',
+            wordCount: 0,
             version: 1,
+            generationProviderId: input.providerId,
+            generationModel: input.model,
+            thinkingRequested: false,
             origin: 'demo',
             verificationStatus: 'demo',
             createdAt: now(),
             updatedAt: now(),
           })
         }
-        synchronizeDerivedSections(draft, input.projectId, now())
       })
+      emitSection({
+        runId,
+        sectionId: sourceSection?.id ?? input.sectionId,
+        type: 'started',
+        providerId: input.providerId,
+        providerName: provider?.name ?? '浏览器演示',
+        model: input.model,
+        thinkingRequested: false,
+      })
+      const deltas = fullContent.match(/.{1,5}/gs) ?? [fullContent]
+      for (const delta of deltas) {
+        await new Promise((resolve) => window.setTimeout(resolve, 24))
+        emitSection({ runId, sectionId: sourceSection?.id ?? input.sectionId, type: 'text-delta', delta })
+      }
+      const completedState = mutate((draft) => {
+        const existing = draft.sections.find((item) => item.id === (sourceSection?.id ?? input.sectionId))
+        if (existing) {
+          const previous = preserveFallbackProjectVersions(draft, existing.projectId)
+          saveSectionContentInState(draft, existing.id, fullContent, now())
+          existing.reasoningContent = undefined
+          existing.generationProviderId = input.providerId
+          existing.generationModel = input.model
+          existing.thinkingRequested = false
+          existing.generationError = undefined
+          recordFallbackDerivedVersions(draft, existing.projectId, existing.id, previous)
+          makeSectionVersion(draft, existing, 'generated')
+        }
+      })
+      const completed = completedState.sections.find((item) => item.id === (sourceSection?.id ?? input.sectionId))
+      if (completed) emitSection({ runId, sectionId: completed.id, type: 'completed', section: clone(completed) })
     },
     async save(sectionId, content) {
       mutate((draft) => {
-        saveSectionContentInState(draft, sectionId, content, now())
+        const section = draft.sections.find((item) => item.id === sectionId)
+        if (!section) throw new Error('未找到对应章节')
+        const previous = preserveFallbackProjectVersions(draft, section.projectId)
+        const saved = saveSectionContentInState(draft, sectionId, content, now())
+        recordFallbackDerivedVersions(draft, section.projectId, sectionId, previous)
+        const active = draft.sectionVersions.find((item) => item.id === saved.activeGenerationVersionId)
+        if (active?.content !== saved.content) makeSectionVersion(draft, saved, 'saved')
       })
     },
     async setActive(sectionId) {
@@ -1243,6 +1643,31 @@ const fallbackApi: PaperAgentApi = {
       })
       return clone(next)
     },
+    async selectVersion(sectionId, versionId) {
+      let selected: ManuscriptSection | undefined
+      mutate((draft) => {
+        const section = draft.sections.find((item) => item.id === sectionId)
+        const version = draft.sectionVersions.find((item) => item.id === versionId && item.sectionId === sectionId)
+        if (!section || !version) throw new Error('未找到章节历史版本')
+        if (section.status === 'generating') throw new Error('章节正在生成，暂时不能切换历史版本')
+        const previous = preserveFallbackProjectVersions(draft, section.projectId)
+        selected = saveSectionContentInState(draft, sectionId, version.content, now())
+        selected.reasoningContent = version.reasoningContent
+        selected.generationProviderId = version.generationProviderId
+        selected.generationModel = version.generationModel
+        selected.thinkingRequested = version.thinkingRequested
+        selected.status = version.status
+        selected.generationError = version.source === 'partial' ? '这是一次未完整生成的历史版本。' : undefined
+        recordFallbackDerivedVersions(draft, section.projectId, sectionId, previous)
+        selected.activeGenerationVersionId = version.id
+      })
+      if (!selected) throw new Error('未找到章节历史版本')
+      return clone(selected)
+    },
+    onEvent(listener) {
+      sectionListeners.add(listener)
+      return () => sectionListeners.delete(listener)
+    },
   },
   chat: {
     async start(input) {
@@ -1260,6 +1685,7 @@ const fallbackApi: PaperAgentApi = {
         providerId: input.providerId,
         model: input.model,
         contextScope: input.contextScope,
+        contextReferences: input.contextReferences,
         origin: 'demo',
         verificationStatus: 'demo',
         createdAt,

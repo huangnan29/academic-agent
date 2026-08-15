@@ -1,27 +1,47 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, stat } from 'node:fs/promises'
+import { mkdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
 import type {
   AgentRun,
+  AppearanceSettings,
+  ChatContextReference,
+  ChatStartInput,
   LiteratureRecord,
   McpResourceReadResult,
   McpServerConfig,
   McpToolCallResult,
+  SystemPermissionKind,
+  WorkspaceState,
 } from '../../shared/contracts'
+import {
+  appearancePatchFromThemeDocument,
+  createAppearanceThemeDocument,
+} from '../../shared/appearance'
 import { IPC } from '../../shared/ipc'
+import {
+  DEFAULT_ARXIV_MCP_SERVER_ID,
+  DEFAULT_ARXIV_MCP_TOOL_NAME,
+} from '../../shared/defaultMcp'
 import { LiteratureService } from '../services/literature'
 import { createProviderAdapter } from '../services/providers'
+import { sanitizeMcpText } from '../services/pipeline/context'
 import { WorkspaceRepository } from '../services/storage/workspaceRepository'
-import { ChatCoordinator } from './chatCoordinator'
+import { ChatCoordinator, type ChatMcpToolPlan } from './chatCoordinator'
+import { extractConversationAttachment } from './attachments'
 import { ConfigurationService } from './configuration'
 import { toUserMessage } from './errors'
 import { ExportCoordinator } from './exportCoordinator'
 import { PaperCoordinator } from './paperCoordinator'
 import {
   chatStartSchema,
+  appearanceSettingsInputSchema,
+  appearanceThemeDocumentSchema,
   conversationUpdateSchema,
   literatureSearchSchema,
+  literatureAddFromMessageSchema,
+  literatureDeleteSchema,
+  literatureSetProjectSchema,
   mcpServerInputSchema,
   outlineGenerateSchema,
   outlineSchema,
@@ -32,10 +52,298 @@ import {
   skillInputSchema,
 } from './schemas'
 import { isAllowedExternalUrl } from './window'
+import { SystemPermissionService } from './systemPermissions'
+import { VoiceInputService } from './voiceInput'
+import { executeArxivSearchWithRetry, planArxivSearchQueries } from './arxivSearch'
+import { extractMcpLiteratureCandidates } from './mcpLiterature'
 
 export interface McpTestResult {
   tools: McpServerConfig['tools']
   resources: McpServerConfig['resources']
+}
+
+interface PreparedSlashToolInput {
+  input: ChatStartInput
+  argumentTextByReference: Map<string, string>
+}
+
+function prepareSlashToolReferences(
+  state: WorkspaceState,
+  input: ChatStartInput,
+): PreparedSlashToolInput {
+  const references = [...(input.contextReferences ?? [])]
+  const argumentTextByReference = new Map<string, string>()
+  const direct = /^\/([A-Za-z0-9_.:-]+)(?:\s+([\s\S]*))?$/.exec(input.content.trim())
+
+  if (direct) {
+    const requestedToolName = direct[1]
+    const selectedMatches = references
+      .filter((reference): reference is Extract<ChatContextReference, { kind: 'mcp-tool' }> => (
+        reference.kind === 'mcp-tool'
+        && matchesRequestedSlashTool(reference.serverId, reference.toolName, requestedToolName)
+      ))
+      .flatMap((reference) => {
+        const server = state.mcpServers.find((item) => item.id === reference.serverId && item.enabled)
+        const tool = server?.tools.find((item) => item.name === reference.toolName)
+        return server && tool ? [{ server, tool }] : []
+      })
+    const discoveredMatches = state.mcpServers
+      .filter((server) => server.enabled)
+      .flatMap((server) => server.tools
+        .filter((tool) => matchesRequestedSlashTool(server.id, tool.name, requestedToolName))
+        .map((tool) => ({ server, tool })))
+    const matches = selectedMatches.length > 0 ? [selectedMatches[selectedMatches.length - 1]] : discoveredMatches
+    if (matches.length === 0) throw new Error(`没有找到已启用的 MCP 工具 /${requestedToolName}。`)
+    if (matches.length > 1) throw new Error(`多个 MCP 服务提供 /${requestedToolName}，请从“/”菜单选择具体服务。`)
+    const match = matches[0]
+    const reference: ChatContextReference = {
+      kind: 'mcp-tool',
+      serverId: match.server.id,
+      toolName: match.tool.name,
+    }
+    if (selectedMatches.length > 1) {
+      for (let index = references.length - 1; index >= 0; index -= 1) {
+        const item = references[index]
+        if (
+          item.kind === 'mcp-tool'
+          && matchesRequestedSlashTool(item.serverId, item.toolName, requestedToolName)
+          && referenceIdentity(item) !== referenceIdentity(reference)
+        ) references.splice(index, 1)
+      }
+    }
+    if (!references.some((item) => referenceIdentity(item) === referenceIdentity(reference))) {
+      references.push(reference)
+    }
+    argumentTextByReference.set(referenceIdentity(reference), direct[2]?.trim() ?? '')
+  }
+
+  return {
+    input: { ...input, contextReferences: references },
+    argumentTextByReference,
+  }
+}
+
+function buildSlashMcpPlans(
+  state: WorkspaceState,
+  input: ChatStartInput,
+  argumentTextByReference: Map<string, string>,
+  configuration: ConfigurationService,
+  callTool: IpcDependencies['callMcpTool'],
+): ChatMcpToolPlan[] {
+  const toolReferences = (input.contextReferences ?? [])
+    .filter((reference): reference is Extract<ChatContextReference, { kind: 'mcp-tool' }> => reference.kind === 'mcp-tool')
+  const unique = new Map(toolReferences.map((reference) => [referenceIdentity(reference), reference]))
+  if (unique.size > 3) throw new Error('单条消息最多执行 3 个 MCP 工具。')
+
+  const plans: ChatMcpToolPlan[] = []
+  for (const reference of unique.values()) {
+    const server = configuration.resolvedMcpServer(reference.serverId)
+    if (!server.enabled) throw new Error(`MCP 服务 ${server.name} 已停用。`)
+    const tool = server.tools.find((item) => item.name === reference.toolName)
+    if (!tool) throw new Error(`MCP 工具 ${reference.toolName} 不存在，请先重新测试服务。`)
+    const argumentText = argumentTextByReference.get(referenceIdentity(reference)) ?? input.content.trim()
+    const originalArguments = buildSlashToolArguments(server.id, tool.name, tool.inputSchema, argumentText)
+    let resolvedArguments = originalArguments
+    plans.push({
+      serverId: server.id,
+      serverName: server.name,
+      toolName: tool.name,
+      get arguments() {
+        return resolvedArguments
+      },
+      async execute(signal) {
+        let result: McpToolCallResult
+        if (
+          server.id === DEFAULT_ARXIV_MCP_SERVER_ID
+          && (tool.name === 'search_papers' || tool.name === 'semantic_search')
+          && typeof originalArguments.query === 'string'
+        ) {
+          const profile = state.providers.find((item) => item.id === input.providerId && item.enabled)
+          const project = state.projects.find((item) => item.id === input.projectId)
+          if (!profile) throw new Error('无法使用当前模型规划 arXiv 英文检索式。')
+          const queries = await planArxivSearchQueries({
+            request: originalArguments.query,
+            projectTitle: project?.title,
+            projectBrief: project
+              ? [
+                  project.brief.paperType,
+                  project.brief.discipline,
+                  project.brief.requirements,
+                  project.brief.keywords.join('、'),
+                ].filter(Boolean).join('；')
+              : undefined,
+            profile,
+            apiKey: configuration.providerSecret(profile.id),
+            model: input.model,
+            signal,
+          })
+          const attempted = await executeArxivSearchWithRetry(
+            originalArguments,
+            queries,
+            (arguments_) => callTool(server, tool.name, arguments_, signal),
+            (arguments_) => {
+              // 在真实外部调用前更新 getter，失败或取消时审计也能读取本次英文查询。
+              resolvedArguments = arguments_
+            },
+          )
+          resolvedArguments = attempted.arguments
+          result = attempted.result
+        } else {
+          result = await callTool(server, tool.name, originalArguments, signal)
+        }
+        if (result.isError) {
+          throw new Error(`${server.name} / ${tool.name} 返回错误：${mcpResultSummary(result)}`)
+        }
+        return result
+      },
+    })
+  }
+  return plans
+}
+
+function buildSlashToolArguments(
+  serverId: string,
+  toolName: string,
+  inputSchema: Record<string, unknown> | undefined,
+  argumentText: string,
+): Record<string, unknown> {
+  const trimmed = argumentText.trim()
+  if (trimmed.startsWith('{')) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(trimmed)
+    } catch {
+      throw new Error(`/${toolName} 后的 JSON 参数无法解析。`)
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(`/${toolName} 的 JSON 参数必须是对象。`)
+    }
+    const arguments_ = parsed as Record<string, unknown>
+    return serverId === DEFAULT_ARXIV_MCP_SERVER_ID && toolName === 'search_papers'
+      ? validateArxivSearchArguments(arguments_)
+      : arguments_
+  }
+
+  if (serverId === DEFAULT_ARXIV_MCP_SERVER_ID) {
+    if (toolName === 'search_papers' || toolName === 'semantic_search') {
+      if (!trimmed) throw new Error(`请在 /${toolName} 后输入检索词。`)
+      return { query: trimmed, max_results: extractRequestedPaperCount(trimmed) ?? 5 }
+    }
+    if (toolName === 'download_paper' || toolName === 'read_paper' || toolName === 'citation_graph') {
+      const paperId = extractArxivPaperId(trimmed)
+      if (!paperId) throw new Error(`请在 /${toolName} 后输入 arXiv 论文 ID。`)
+      return { paper_id: paperId }
+    }
+    if (toolName === 'get_abstract' || toolName === 'get_paper_latex' || toolName === 'list_paper_latex_sections') {
+      const paperId = extractArxivPaperId(trimmed)
+      if (!paperId) throw new Error(`请在 /${toolName} 后输入 arXiv 论文 ID。`)
+      return { paper_id: paperId }
+    }
+    if (toolName === 'list_papers') return {}
+    if (toolName === 'watch_topic') {
+      if (!trimmed) throw new Error('请在 /watch_topic 后输入关注主题。')
+      return { topic: trimmed, max_results: 10 }
+    }
+    if (toolName === 'check_alerts') return trimmed ? { topic: trimmed } : {}
+    if (toolName === 'reindex') return {}
+  }
+
+  const properties = inputSchema?.properties
+  const propertyMap = properties && typeof properties === 'object' && !Array.isArray(properties)
+    ? properties as Record<string, unknown>
+    : {}
+  const required = Array.isArray(inputSchema?.required)
+    ? inputSchema.required.filter((item): item is string => typeof item === 'string')
+    : []
+  if (required.length === 0 && !trimmed) return {}
+  const preferred = ['query', 'topic', 'text', 'prompt', 'paper_id']
+    .find((name) => name in propertyMap && (required.length === 0 || required.includes(name)))
+  const soleRequired = required.length === 1 ? required[0] : undefined
+  const argumentName = preferred ?? soleRequired
+  if (argumentName && trimmed) {
+    return { [argumentName]: argumentName === 'paper_id' ? extractArxivPaperId(trimmed) ?? trimmed : trimmed }
+  }
+  throw new Error(`/${toolName} 需要结构化参数，请在命令后输入 JSON 对象。`)
+}
+
+function extractArxivPaperId(value: string): string | undefined {
+  return value.match(/(?:arxiv:\s*|arxiv\.org\/(?:abs|pdf)\/)?(\d{4}\.\d{4,5}(?:v\d+)?)/i)?.[1]
+}
+
+function matchesRequestedSlashTool(serverId: string, actualName: string, requestedName: string): boolean {
+  if (actualName.toLocaleLowerCase() === requestedName.toLocaleLowerCase()) return true
+  return serverId === DEFAULT_ARXIV_MCP_SERVER_ID
+    && requestedName.toLocaleLowerCase() === 'paper_search'
+    && actualName === DEFAULT_ARXIV_MCP_TOOL_NAME
+}
+
+function extractRequestedPaperCount(value: string): number | undefined {
+  const matched = /(?:搜索|检索|查找|找)?\s*(\d+)\s*篇/u.exec(value)
+  if (!matched) return undefined
+  return Math.min(50, Math.max(1, Number(matched[1])))
+}
+
+function validateArxivSearchArguments(arguments_: Record<string, unknown>): Record<string, unknown> {
+  const allowed = new Set(['query', 'max_results', 'date_from', 'date_to', 'categories', 'sort_by'])
+  const unknown = Object.keys(arguments_).find((key) => !allowed.has(key))
+  if (unknown) throw new Error(`/search_papers 不支持参数 ${unknown}。`)
+  if (typeof arguments_.query !== 'string' || !arguments_.query.trim()) {
+    throw new Error('/search_papers 的 query 必须是非空字符串。')
+  }
+  if (
+    arguments_.max_results !== undefined
+    && (
+      typeof arguments_.max_results !== 'number'
+      || !Number.isInteger(arguments_.max_results)
+      || arguments_.max_results < 1
+      || arguments_.max_results > 50
+    )
+  ) throw new Error('/search_papers 的 max_results 必须是 1–50 的整数。')
+  for (const field of ['date_from', 'date_to'] as const) {
+    const value = arguments_[field]
+    if (value !== undefined && (typeof value !== 'string' || !isValidIsoDate(value))) {
+      throw new Error(`/search_papers 的 ${field} 必须使用 YYYY-MM-DD。`)
+    }
+  }
+  if (
+    arguments_.categories !== undefined
+    && (!Array.isArray(arguments_.categories) || !arguments_.categories.every((item) => typeof item === 'string' && item.trim()))
+  ) throw new Error('/search_papers 的 categories 必须是非空字符串数组。')
+  if (arguments_.sort_by !== undefined && arguments_.sort_by !== 'relevance' && arguments_.sort_by !== 'date') {
+    throw new Error('/search_papers 的 sort_by 只能是 relevance 或 date。')
+  }
+  return {
+    ...arguments_,
+    query: arguments_.query.trim(),
+    max_results: arguments_.max_results ?? 5,
+  }
+}
+
+function isValidIsoDate(value: string): boolean {
+  const matched = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value)
+  if (!matched) return false
+  const year = Number(matched[1])
+  const month = Number(matched[2])
+  const day = Number(matched[3])
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day
+}
+
+function referenceIdentity(reference: ChatContextReference): string {
+  if (reference.kind === 'skill') return `skill:${reference.skillId}`
+  if (reference.kind === 'mcp-tool') return `mcp-tool:${reference.serverId}:${reference.toolName}`
+  return `mcp:${reference.serverId}`
+}
+
+function mcpResultSummary(result: McpToolCallResult): string {
+  const text = result.content
+    .map((item) => item && typeof item === 'object' && !Array.isArray(item)
+      ? (item as Record<string, unknown>).text
+      : undefined)
+    .find((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+  return sanitizeMcpText(text ?? '工具未提供详细错误').replace(/\s+/g, ' ').slice(0, 500)
 }
 
 export interface IpcDependencies {
@@ -46,11 +354,15 @@ export interface IpcDependencies {
   paper: PaperCoordinator
   exporter: ExportCoordinator
   literature: LiteratureService
+  systemPermissions: SystemPermissionService
+  voiceInput: VoiceInputService
+  applyAppearance(appearance: AppearanceSettings): void | Promise<void>
   testMcp(server: McpServerConfig): Promise<McpTestResult>
   callMcpTool(
     server: McpServerConfig,
     name: string,
     args: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<McpToolCallResult>
   readMcpResource(server: McpServerConfig, uri: string): Promise<McpResourceReadResult>
   disconnectMcp(serverId: string): Promise<void>
@@ -72,6 +384,50 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
 
   handle(IPC.workspaceSetSidebarPreferences, async (_event, payload: unknown) => {
     return repository.setSidebarPreferences(sidebarPreferencesSchema.parse(payload))
+  })
+
+  handle(IPC.appearanceUpdate, async (_event, payload: unknown) => {
+    const next = await repository.setAppearance(appearanceSettingsInputSchema.parse(payload))
+    await dependencies.applyAppearance(next.settings.appearance)
+    return next
+  })
+
+  handle(IPC.appearanceImportTheme, async (event) => {
+    const parent = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const options: Electron.OpenDialogOptions = {
+      title: '导入外观主题',
+      buttonLabel: '导入',
+      filters: [{ name: '学术 Agent 主题', extensions: ['json'] }],
+      properties: ['openFile'],
+      message: '仅导入由学术 Agent 复制的版本化 JSON 外观主题。',
+    }
+    const result = parent
+      ? await dialog.showOpenDialog(parent, options)
+      : await dialog.showOpenDialog(options)
+    if (result.canceled || !result.filePaths[0]) return repository.snapshot()
+
+    const selectedPath = result.filePaths[0]
+    const metadata = await stat(selectedPath)
+    if (!metadata.isFile() || metadata.size <= 0 || metadata.size > 64 * 1024) {
+      throw new Error('主题文件必须是小于 64 KB 的非空 JSON 文件。')
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(await readFile(selectedPath, 'utf8'))
+    } catch {
+      throw new Error('主题文件不是有效的 JSON。')
+    }
+    const document = appearanceThemeDocumentSchema.parse(parsed)
+    const next = await repository.setAppearance(appearancePatchFromThemeDocument(document))
+    await dependencies.applyAppearance(next.settings.appearance)
+    return next
+  })
+
+  handle(IPC.appearanceCopyTheme, () => {
+    const document = createAppearanceThemeDocument(repository.snapshot().settings.appearance)
+    const serialized = `${JSON.stringify(document, null, 2)}\n`
+    clipboard.writeText(serialized)
+    return serialized
   })
 
   handle(IPC.projectCreate, async (_event, payload) => {
@@ -171,7 +527,46 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
   )
 
   handle(IPC.conversationUpdate, async (_event, payload: unknown) => {
-    return repository.updateConversation(conversationUpdateSchema.parse(payload))
+    const input = conversationUpdateSchema.parse(payload)
+    if (input.accessMode === 'full') {
+      const permissions = await dependencies.systemPermissions.snapshot()
+      if (!permissions.fullAccessReady) {
+        throw new Error('尚未完成 macOS 辅助功能与完全磁盘访问授权。')
+      }
+    }
+    return repository.updateConversation(input)
+  })
+
+  handle(IPC.systemPermissionsGet, () => dependencies.systemPermissions.snapshot())
+
+  handle(IPC.systemPermissionsRequestFullAccess, () =>
+    dependencies.systemPermissions.requestFullAccess(),
+  )
+
+  handle(IPC.systemPermissionsRequestMicrophone, () =>
+    dependencies.systemPermissions.requestMicrophone(),
+  )
+
+  handle(IPC.systemPermissionsOpenSettings, async (_event, kind: unknown) => {
+    if (!isSystemPermissionKind(kind)) throw new Error('系统权限类型无效。')
+    await dependencies.systemPermissions.openSettings(kind)
+  })
+
+  handle(IPC.voiceInputStatus, () => dependencies.voiceInput.status())
+
+  handle(IPC.voiceInputStart, async (event) => {
+    const permissions = await dependencies.systemPermissions.snapshot()
+    if (permissions.microphone !== 'granted') {
+      throw new Error('macOS 尚未允许学术 Agent 使用麦克风，请先完成系统授权。')
+    }
+    return dependencies.voiceInput.start(event.sender)
+  })
+
+  handle(IPC.voiceInputStop, async (_event, sessionId: unknown) => {
+    if (typeof sessionId !== 'string' || sessionId.length < 1 || sessionId.length > 100) {
+      throw new Error('语音识别会话无效。')
+    }
+    await dependencies.voiceInput.stop(sessionId)
   })
 
   handle(
@@ -188,6 +583,41 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
     const conversation = repository.snapshot().conversations.find((item) => item.id === conversationId)
     if (!conversation) throw new Error('对话不存在或已经被移除。')
     clipboard.writeText(conversation.id)
+  })
+
+  handle(IPC.conversationChooseAttachments, async (event, conversationId: unknown) => {
+    assertId(conversationId, '对话')
+    const snapshot = repository.snapshot()
+    const conversation = snapshot.conversations.find((item) => item.id === conversationId)
+    if (!conversation) throw new Error('对话不存在或已经被移除。')
+    const project = snapshot.projects.find((item) => item.id === conversation.projectId)
+    if (!project) throw new Error('对话所属研究不存在。')
+    const parent = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const options: Electron.OpenDialogOptions = {
+      title: '添加到当前对话',
+      buttonLabel: '添加',
+      properties: ['openFile', 'openDirectory', 'multiSelections'],
+      message: '文本文件会在本机提取内容并加入当前对话上下文。',
+    }
+    const result = parent
+      ? await dialog.showOpenDialog(parent, options)
+      : await dialog.showOpenDialog(options)
+    if (result.canceled || result.filePaths.length === 0) return snapshot
+    if (result.filePaths.length > 10) throw new Error('每次最多添加 10 个文件或文件夹。')
+    const attachments = await Promise.all(
+      result.filePaths.map((selectedPath) => extractConversationAttachment(selectedPath, {
+        projectId: project.id,
+        conversationId: conversation.id,
+        origin: project.origin,
+        verificationStatus: project.verificationStatus,
+      })),
+    )
+    return repository.addConversationAttachments(conversation.id, attachments)
+  })
+
+  handle(IPC.conversationRemoveAttachment, async (_event, attachmentId: unknown) => {
+    assertId(attachmentId, '附件')
+    return repository.removeConversationAttachment(attachmentId)
   })
 
   handle(IPC.providerSave, async (_event, payload) => {
@@ -220,12 +650,6 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
 
   handle(IPC.literatureSearch, async (_event, payload) => {
     const input = literatureSearchSchema.parse(payload)
-    const targetProject = input.projectId
-      ? repository.snapshot().projects.find((project) => project.id === input.projectId)
-      : undefined
-    if (targetProject?.origin === 'demo') {
-      throw new Error('演示项目不能混入真实检索结果，请先新建一个研究项目。')
-    }
     const run = input.projectId
       ? createRun(input.projectId, 'research', '检索公开文献', `正在检索“${input.query}”`)
       : undefined
@@ -276,6 +700,25 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
     },
   )
 
+  handle(IPC.literatureAddFromMessage, async (_event, payload) => {
+    const input = literatureAddFromMessageSchema.parse(payload)
+    return repository.addLiteratureFromMessage(input.messageId, input.candidateIds)
+  })
+
+  handle(IPC.literatureSetProject, async (_event, payload) => {
+    const input = literatureSetProjectSchema.parse(payload)
+    return repository.setLiteratureProject(
+      input.literatureId,
+      input.sourceProjectId,
+      input.targetProjectId,
+    )
+  })
+
+  handle(IPC.literatureDelete, async (_event, payload) => {
+    const input = literatureDeleteSchema.parse(payload)
+    return repository.deleteLiterature(input.literatureId, input.sourceProjectId)
+  })
+
   handle(IPC.outlineGenerate, async (_event, payload) => {
     return paper.generateOutline(outlineGenerateSchema.parse(payload))
   })
@@ -298,8 +741,8 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
     return sanitized
   })
 
-  handle(IPC.sectionGenerate, async (_event, payload) => {
-    await paper.generateSection(sectionGenerateSchema.parse(payload))
+  handle(IPC.sectionGenerate, async (event, payload) => {
+    await paper.generateSection(sectionGenerateSchema.parse(payload), event.sender)
   })
 
   handle(IPC.sectionSave, async (_event, sectionId: unknown, content: unknown) => {
@@ -315,8 +758,23 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
     return repository.setActiveSection(sectionId)
   })
 
+  handle(IPC.sectionSelectVersion, async (_event, sectionId: unknown, versionId: unknown) => {
+    assertId(sectionId, '章节')
+    assertId(versionId, '章节版本')
+    return repository.selectSectionVersion(sectionId, versionId)
+  })
+
   handle(IPC.chatStart, async (event, payload) => {
-    return chat.start(chatStartSchema.parse(payload), event.sender)
+    const parsed = chatStartSchema.parse(payload)
+    const prepared = prepareSlashToolReferences(repository.snapshot(), parsed)
+    const mcpPlans = buildSlashMcpPlans(
+      repository.snapshot(),
+      prepared.input,
+      prepared.argumentTextByReference,
+      configuration,
+      dependencies.callMcpTool,
+    )
+    return chat.start(prepared.input, event.sender, mcpPlans)
   })
 
   handle(IPC.chatCancel, async (_event, runId: unknown) => {
@@ -440,13 +898,16 @@ async function searchLiteratureWithMcp(
   if (!input.mcp) return []
   const server = configuration.resolvedMcpServer(input.mcp.serverId)
   if (!server.enabled) throw new Error('所选 MCP 服务尚未启用。')
+  const resultLimit = Math.min(20, Math.max(1, input.limit ?? 20))
+  const isBuiltInArxivSearch = server.id === DEFAULT_ARXIV_MCP_SERVER_ID
+    && input.mcp.toolName === DEFAULT_ARXIV_MCP_TOOL_NAME
   const result = await dependencies.callMcpTool(
     server,
     input.mcp.toolName,
     {
       [input.mcp.queryArgument ?? 'query']: input.query,
-      // 通用 MCP 文献工具通常只接受较小批次，统一限制为 1..20 以兼容其输入边界。
-      limit: Math.min(20, Math.max(1, input.limit ?? 20)),
+      // arXiv MCP 使用 max_results；其他通用文献 MCP 延续 limit 参数。
+      [isBuiltInArxivSearch ? 'max_results' : 'limit']: resultLimit,
     },
   )
   const candidates = extractMcpLiteratureCandidates(result)
@@ -474,123 +935,8 @@ async function searchLiteratureWithMcp(
   }))
 }
 
-function extractMcpLiteratureCandidates(result: McpToolCallResult): Array<{
-  title: string
-  authors: string[]
-  year?: number
-  venue?: string
-  abstract?: string
-  doi?: string
-  url?: string
-}> {
-  const values: unknown[] = []
-  if (result.structuredContent) values.push(result.structuredContent)
-  for (const block of result.content ?? []) {
-    if (!block || typeof block !== 'object') continue
-    const record = block as Record<string, unknown>
-    if (record.type !== 'text' || typeof record.text !== 'string') continue
-    try {
-      values.push(JSON.parse(record.text) as unknown)
-    } catch {
-      // 纯文本没有稳定书目结构，不自动写入文献库。
-    }
-  }
-
-  const records: Record<string, unknown>[] = []
-  const collect = (value: unknown) => {
-    if (Array.isArray(value)) {
-      value.forEach(collect)
-      return
-    }
-    if (!value || typeof value !== 'object') return
-    const record = value as Record<string, unknown>
-    const nested = ['results', 'items', 'papers', 'works', 'data']
-      .map((key) => record[key])
-      .find(Array.isArray)
-    if (nested) {
-      collect(nested)
-      return
-    }
-    records.push(record)
-  }
-  values.forEach(collect)
-
-  const normalized = records
-    .map((record) => {
-      const title = stringValue(record.title, record.display_name, record.name)
-      if (!title) return undefined
-      const rawAuthors = record.authors ?? record.author
-      const authors = Array.isArray(rawAuthors)
-        ? rawAuthors
-            .map((author) =>
-              typeof author === 'string'
-                ? author
-                : author && typeof author === 'object'
-                  ? stringValue((author as Record<string, unknown>).name, (author as Record<string, unknown>).display_name)
-                  : undefined,
-            )
-            .filter((author): author is string => Boolean(author))
-        : typeof rawAuthors === 'string'
-          ? rawAuthors.split(/[;,，；]/).map((item) => item.trim()).filter(Boolean)
-          : []
-      const yearValue = Number(record.year ?? record.publication_year ?? record.published)
-      return {
-        title: title.slice(0, 1_000),
-        authors: authors.slice(0, 100),
-        year: Number.isInteger(yearValue) && yearValue >= 1000 && yearValue <= 3000 ? yearValue : undefined,
-        venue: stringValue(record.venue, record.journal, record.publisher)?.slice(0, 500),
-        abstract: stringValue(record.abstract, record.summary)?.slice(0, 20_000),
-        doi: normalizeMcpDoi(record.doi)?.slice(0, 300),
-        url: safeHttpUrl(stringValue(record.url, record.landing_page_url)),
-      }
-    })
-    .filter((record): record is NonNullable<typeof record> => Boolean(record))
-
-  const seen = new Set<string>()
-  return normalized.filter((record) => {
-    // structuredContent 与 JSON 文本可能承载同一批结果；优先按 DOI，否则按标题和年份去重。
-    const identity = record.doi
-      ? `doi:${record.doi}`
-      : `title:${normalizeMcpTitle(record.title)}|year:${record.year ?? 'unknown'}`
-    if (seen.has(identity)) return false
-    seen.add(identity)
-    return true
-  })
-}
-
-function normalizeMcpDoi(value: unknown): string | undefined {
-  return stringValue(value)
-    ?.normalize('NFKC')
-    .replace(/^doi:\s*/i, '')
-    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
-    .split(/[?#]/, 1)[0]
-    .replace(/[\s.,;:]+$/g, '')
-    .trim()
-    .toLocaleLowerCase() || undefined
-}
-
-function normalizeMcpTitle(value: string): string {
-  const normalized = value
-    .normalize('NFKC')
-    .toLocaleLowerCase()
-    .replace(/[\p{P}\p{S}\s]+/gu, '')
-  return normalized || value.normalize('NFKC').toLocaleLowerCase().trim()
-}
-
 function stringValue(...values: unknown[]): string | undefined {
   return values.find((value): value is string => typeof value === 'string' && Boolean(value.trim()))?.trim()
-}
-
-function safeHttpUrl(value: string | undefined): string | undefined {
-  if (!value) return undefined
-  try {
-    const url = new URL(value)
-    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password
-      ? url.toString()
-      : undefined
-  } catch {
-    return undefined
-  }
 }
 
 function handle(
@@ -648,6 +994,15 @@ function assertId(value: unknown, label: string): asserts value is string {
   if (typeof value !== 'string' || !value.trim() || value.length > 200) {
     throw new Error(`${label}标识无效。`)
   }
+}
+
+function isSystemPermissionKind(value: unknown): value is SystemPermissionKind {
+  return (
+    value === 'accessibility' ||
+    value === 'full-disk-access' ||
+    value === 'screen-recording' ||
+    value === 'microphone'
+  )
 }
 
 function safeResearchFolderName(title: string): string {

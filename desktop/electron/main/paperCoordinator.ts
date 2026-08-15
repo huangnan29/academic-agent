@@ -1,12 +1,16 @@
 import { randomUUID } from 'node:crypto'
+import type { WebContents } from 'electron'
 import type {
   AgentRun,
   CitationEvidence,
+  ManuscriptSection,
   OutlineGenerateInput,
   OutlineNode,
   SectionGenerateInput,
+  SectionStreamEvent,
 } from '../../shared/contracts'
-import { createProviderAdapter } from '../services/providers'
+import { createProviderAdapter, usesExplicitDeepSeekThinking } from '../services/providers'
+import { IPC } from '../../shared/ipc'
 import {
   buildOutlinePrompt,
   buildSectionPrompt,
@@ -33,6 +37,7 @@ export class PaperCoordinator {
     if (!project) throw new Error('项目不存在。')
     const profile = this.repository.getProvider(input.providerId)
     if (!profile || !profile.enabled) throw new Error('所选模型服务未启用。')
+    await this.repository.promoteProjectForProvider(input.projectId, profile.id)
     const adapter = createProviderAdapter(
       profile,
       this.configuration.providerSecret(input.providerId),
@@ -99,7 +104,7 @@ export class PaperCoordinator {
     }
   }
 
-  async generateSection(input: SectionGenerateInput): Promise<void> {
+  async generateSection(input: SectionGenerateInput, sender: WebContents): Promise<void> {
     const state = this.repository.snapshot()
     const project = state.projects.find((item) => item.id === input.projectId)
     const section = state.sections.find(
@@ -108,6 +113,7 @@ export class PaperCoordinator {
     if (!project || !section) throw new Error('项目或论文章节不存在。')
     const profile = this.repository.getProvider(input.providerId)
     if (!profile || !profile.enabled) throw new Error('所选模型服务未启用。')
+    await this.repository.promoteProjectForProvider(input.projectId, profile.id)
     const adapter = createProviderAdapter(
       profile,
       this.configuration.providerSecret(input.providerId),
@@ -119,19 +125,59 @@ export class PaperCoordinator {
       ['生成章节草稿', `正在使用 ${profile.name} / ${input.model}`, 'running'],
       ['检查引用与篇幅', '等待章节生成完成', 'pending'],
     ])
-    await this.repository.saveRun(run)
-    await this.repository.updateSection(input.sectionId, { status: 'generating' })
+    const thinkingRequested = usesExplicitDeepSeekThinking(profile, input.model)
+    const generation = await this.repository.beginSectionGeneration(input.sectionId, {
+      generationProviderId: profile.id,
+      generationModel: input.model,
+      thinkingRequested,
+    })
     let content = ''
+    let reasoningContent = ''
+    let savedSection: ManuscriptSection | undefined
+    let runSaved = false
 
     try {
+      await this.repository.saveRun(run)
+      runSaved = true
+      this.sendSection(sender, {
+        runId: run.id,
+        sectionId: input.sectionId,
+        type: 'started',
+        providerId: profile.id,
+        providerName: profile.name,
+        model: input.model,
+        thinkingRequested,
+      })
       for await (const event of adapter.streamChat(messages, input.model)) {
-        if (event.type !== 'text-delta') continue
-        content += event.delta
-        if (content.length > MAX_GENERATED_CONTENT_CHARS) {
-          throw new Error('模型返回的章节内容超过本机安全上限。')
+        if (event.type === 'reasoning-delta') {
+          reasoningContent += event.delta
+          if (reasoningContent.length > MAX_GENERATED_CONTENT_CHARS) {
+            throw new Error('模型返回的章节推理内容超过本机安全上限。')
+          }
+          this.sendSection(sender, { runId: run.id, sectionId: input.sectionId, type: 'reasoning-delta', delta: event.delta })
+          continue
+        }
+        if (event.type === 'text-delta') {
+          content += event.delta
+          if (content.length > MAX_GENERATED_CONTENT_CHARS) {
+            throw new Error('模型返回的章节内容超过本机安全上限。')
+          }
+          this.sendSection(sender, { runId: run.id, sectionId: input.sectionId, type: 'text-delta', delta: event.delta })
         }
       }
-      await this.repository.saveSection(input.sectionId, content)
+      savedSection = await this.repository.commitSectionGeneration(
+        input.sectionId,
+        generation.baseVersion,
+        content,
+        {
+          source: 'generated',
+          reasoningContent: reasoningContent || undefined,
+          generationProviderId: profile.id,
+          generationModel: input.model,
+          thinkingRequested,
+          generationError: undefined,
+        },
+      )
 
       const included = state.literature.filter(
         (item) => item.projectId === input.projectId && item.included && item.origin !== 'demo',
@@ -187,17 +233,62 @@ export class PaperCoordinator {
           },
         ],
       })
+      this.sendSection(sender, {
+        runId: run.id,
+        sectionId: input.sectionId,
+        type: 'completed',
+        section: savedSection,
+      })
     } catch (error) {
-      await this.repository.updateSection(input.sectionId, { status: 'error' })
       const message = error instanceof Error ? error.message : '章节生成失败。'
-      await this.repository.updateRun(run.id, {
-        status: 'error',
-        error: message,
-        steps: run.steps.map((step) =>
-          step.status === 'running'
-            ? { ...step, detail: message, status: 'error' as const, completedAt: now() }
-            : step,
-        ),
+      let failedSection = this.repository.snapshot().sections.find((item) => item.id === input.sectionId) ?? generation.section
+      try {
+        failedSection = savedSection
+          ? await this.repository.updateSection(input.sectionId, {
+              status: 'error',
+              generationError: message,
+            })
+          : content
+          ? await this.repository.commitSectionGeneration(
+              input.sectionId,
+              generation.baseVersion,
+              content,
+              {
+                source: 'partial',
+                reasoningContent: reasoningContent || undefined,
+                generationProviderId: profile.id,
+                generationModel: input.model,
+                thinkingRequested,
+                generationError: message,
+              },
+            )
+          : await this.repository.failSectionGeneration(input.sectionId, generation.baseVersion, {
+              reasoningContent: reasoningContent || undefined,
+              generationProviderId: profile.id,
+              generationModel: input.model,
+              thinkingRequested,
+              generationError: message,
+            })
+      } catch {
+        failedSection = this.repository.snapshot().sections.find((item) => item.id === input.sectionId) ?? failedSection
+      }
+      if (runSaved) {
+        await this.repository.updateRun(run.id, {
+          status: 'error',
+          error: message,
+          steps: run.steps.map((step) =>
+            step.status === 'running'
+              ? { ...step, detail: message, status: 'error' as const, completedAt: now() }
+              : step,
+          ),
+        })
+      }
+      this.sendSection(sender, {
+        runId: run.id,
+        sectionId: input.sectionId,
+        type: 'error',
+        message,
+        section: failedSection,
       })
       throw error
     }
@@ -205,6 +296,10 @@ export class PaperCoordinator {
 
   quality(projectId: string) {
     return runProjectQualityChecks(this.repository.snapshot(), projectId)
+  }
+
+  private sendSection(sender: WebContents, event: SectionStreamEvent): void {
+    if (!sender.isDestroyed()) sender.send(IPC.sectionEvent, event)
   }
 }
 

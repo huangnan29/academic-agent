@@ -37,6 +37,24 @@ interface OpenAIStreamChunk {
   error?: { message?: string; code?: string }
 }
 
+export function usesExplicitDeepSeekThinking(profile: ProviderProfile, model: string): boolean {
+  try {
+    const hostname = new URL(profile.baseUrl).hostname.toLowerCase()
+    const normalizedModel = model.trim().toLowerCase()
+    const officialEndpoint = hostname === 'api.deepseek.com'
+    const thinkingModel = normalizedModel.startsWith('deepseek-v4-') || normalizedModel === 'deepseek-reasoner'
+    return officialEndpoint && thinkingModel
+  } catch {
+    return false
+  }
+}
+
+export function deepSeekThinkingParameters(profile: ProviderProfile, model: string) {
+  return usesExplicitDeepSeekThinking(profile, model)
+    ? { reasoning_effort: 'high', thinking: { type: 'enabled' as const } }
+    : {}
+}
+
 export class OpenAICompatibleProvider implements ProviderAdapter {
   readonly profile: ProviderProfile
   private readonly apiKey?: string
@@ -158,6 +176,7 @@ export class OpenAICompatibleProvider implements ProviderAdapter {
             content,
           })),
           stream: true,
+          ...deepSeekThinkingParameters(this.profile, model),
         }),
         signal: request.signal,
       })

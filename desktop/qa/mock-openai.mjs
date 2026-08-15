@@ -4,6 +4,8 @@ import { createServer } from 'node:http'
 const HOST = '127.0.0.1'
 const PORT = parseInteger(process.env.AIWRITEPAPER_MOCK_PORT, 43_123, 1, 65_535)
 const CHUNK_DELAY_MS = parseInteger(process.env.AIWRITEPAPER_MOCK_CHUNK_DELAY_MS, 4, 0, 1_000)
+const REASONING_ENABLED = process.env.AIWRITEPAPER_MOCK_REASONING === '1'
+const FAIL_AFTER_CHUNKS = parseInteger(process.env.AIWRITEPAPER_MOCK_FAIL_AFTER_CHUNKS, 0, 0, 10_000)
 const MODEL_ID = 'mock-paper-agent'
 const MAX_REQUEST_BYTES = 2 * 1024 * 1024
 
@@ -372,6 +374,21 @@ async function writeStreamingCompletion(response, model, content) {
     choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
   })
 
+  if (REASONING_ENABLED) {
+    const reasoning = '本地 QA 推理流：先读取项目稿件上下文，再组织可核验的回答。'
+    for (const delta of splitContent(reasoning, 12)) {
+      writeSse(response, {
+        id: completionId,
+        object: 'chat.completion.chunk',
+        created,
+        model,
+        choices: [{ index: 0, delta: { reasoning_content: delta }, finish_reason: null }],
+      })
+      if (CHUNK_DELAY_MS > 0) await delay(CHUNK_DELAY_MS)
+    }
+  }
+
+  let emittedContentChunks = 0
   for (const delta of splitContent(content, 28)) {
     if (response.destroyed || response.writableEnded) return
     writeSse(response, {
@@ -381,6 +398,12 @@ async function writeStreamingCompletion(response, model, content) {
       model,
       choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
     })
+    emittedContentChunks += 1
+    if (FAIL_AFTER_CHUNKS > 0 && emittedContentChunks >= FAIL_AFTER_CHUNKS) {
+      writeSse(response, { error: { message: '本地 QA 模拟：章节流在生成中断开。', code: 'QA_STREAM_FAILURE' } })
+      response.end()
+      return
+    }
     if (CHUNK_DELAY_MS > 0) await delay(CHUNK_DELAY_MS)
   }
 

@@ -1,10 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type {
+  AppearanceSettingsInput,
   ChatStartInput,
   ChatStreamEvent,
   ConversationUpdateInput,
   ExportFormat,
+  LiteratureAddFromMessageInput,
+  LiteratureDeleteInput,
+  LiteratureSetProjectInput,
   LiteratureSearchInput,
   McpServerInput,
   OutlineGenerateInput,
@@ -12,8 +16,11 @@ import type {
   ProviderInput,
   ResearchBrief,
   SectionGenerateInput,
+  SectionStreamEvent,
   SidebarPreferencesInput,
   SkillInput,
+  SystemPermissionKind,
+  VoiceInputEvent,
 } from '../../shared/contracts'
 
 const api = {
@@ -23,6 +30,12 @@ const api = {
       ipcRenderer.invoke(IPC.workspaceSetActiveModel, providerId, model),
     setSidebarPreferences: (input: SidebarPreferencesInput) =>
       ipcRenderer.invoke(IPC.workspaceSetSidebarPreferences, input),
+  },
+  appearance: {
+    update: (input: AppearanceSettingsInput) =>
+      ipcRenderer.invoke(IPC.appearanceUpdate, input),
+    importTheme: () => ipcRenderer.invoke(IPC.appearanceImportTheme),
+    copyTheme: () => ipcRenderer.invoke(IPC.appearanceCopyTheme),
   },
   project: {
     create: (input: ResearchBrief) => ipcRenderer.invoke(IPC.projectCreate, input),
@@ -43,6 +56,27 @@ const api = {
       ipcRenderer.invoke(IPC.conversationMove, conversationId, targetProjectId),
     copyId: (conversationId: string) =>
       ipcRenderer.invoke(IPC.conversationCopyId, conversationId),
+    chooseAttachments: (conversationId: string) =>
+      ipcRenderer.invoke(IPC.conversationChooseAttachments, conversationId),
+    removeAttachment: (attachmentId: string) =>
+      ipcRenderer.invoke(IPC.conversationRemoveAttachment, attachmentId),
+  },
+  systemPermissions: {
+    get: () => ipcRenderer.invoke(IPC.systemPermissionsGet),
+    requestFullAccess: () => ipcRenderer.invoke(IPC.systemPermissionsRequestFullAccess),
+    requestMicrophone: () => ipcRenderer.invoke(IPC.systemPermissionsRequestMicrophone),
+    openSettings: (kind: SystemPermissionKind) =>
+      ipcRenderer.invoke(IPC.systemPermissionsOpenSettings, kind),
+  },
+  voice: {
+    status: () => ipcRenderer.invoke(IPC.voiceInputStatus),
+    start: () => ipcRenderer.invoke(IPC.voiceInputStart),
+    stop: (sessionId: string) => ipcRenderer.invoke(IPC.voiceInputStop, sessionId),
+    onEvent: (listener: (event: VoiceInputEvent) => void) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, payload: VoiceInputEvent) => listener(payload)
+      ipcRenderer.on(IPC.voiceInputEvent, wrapped)
+      return () => ipcRenderer.removeListener(IPC.voiceInputEvent, wrapped)
+    },
   },
   provider: {
     save: (input: ProviderInput) => ipcRenderer.invoke(IPC.providerSave, input),
@@ -53,6 +87,12 @@ const api = {
     search: (input: LiteratureSearchInput) => ipcRenderer.invoke(IPC.literatureSearch, input),
     toggle: (projectId: string, literatureId: string, included: boolean) =>
       ipcRenderer.invoke(IPC.literatureToggle, projectId, literatureId, included),
+    setProject: (input: LiteratureSetProjectInput) =>
+      ipcRenderer.invoke(IPC.literatureSetProject, input),
+    delete: (input: LiteratureDeleteInput) =>
+      ipcRenderer.invoke(IPC.literatureDelete, input),
+    addFromMessage: (input: LiteratureAddFromMessageInput) =>
+      ipcRenderer.invoke(IPC.literatureAddFromMessage, input),
   },
   outline: {
     generate: (input: OutlineGenerateInput) => ipcRenderer.invoke(IPC.outlineGenerate, input),
@@ -64,6 +104,13 @@ const api = {
     save: (sectionId: string, content: string) =>
       ipcRenderer.invoke(IPC.sectionSave, sectionId, content),
     setActive: (sectionId: string) => ipcRenderer.invoke(IPC.sectionSetActive, sectionId),
+    selectVersion: (sectionId: string, versionId: string) =>
+      ipcRenderer.invoke(IPC.sectionSelectVersion, sectionId, versionId),
+    onEvent: (listener: (event: SectionStreamEvent) => void) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, payload: SectionStreamEvent) => listener(payload)
+      ipcRenderer.on(IPC.sectionEvent, wrapped)
+      return () => ipcRenderer.removeListener(IPC.sectionEvent, wrapped)
+    },
   },
   chat: {
     start: (input: ChatStartInput) => ipcRenderer.invoke(IPC.chatStart, input),

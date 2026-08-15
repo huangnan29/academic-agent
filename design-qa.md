@@ -270,4 +270,202 @@
 - 交互与访问：菜单包含 `menu` / `menuitem`、Esc 关闭与上下方向键导航；拖动条包含 `separator`、方向和数值范围语义，可通过键盘操作。
 - 框架核验：本机 Codex.app 与学术 Agent 均包含 `Electron Framework.framework` 和 `app.asar`；学术 Agent 生产窗口从包内 `dist/index.html` 加载本地渲染文件，启用沙箱、上下文隔离并关闭 Node 集成，不是远程网页套壳。但它仍是 Electron/Chromium UI，不应描述为 SwiftUI/AppKit 原生客户端。
 
+## 14. Codex 式输入框与右侧工作台调宽复验
+
+### 14.1 视觉真值、实现证据与归一化
+
+- 输入框参考：`/var/folders/nh/ytrqnycn7hx1xk7q138h1q540000gn/T/codex-clipboard-1f1b80b6-421b-445c-bd94-ae1deb3dfa9c.png`，1368×346；重点为中性圆角容器、左侧添加入口、右侧模型与圆形发送按钮。
+- 添加菜单参考：`/var/folders/nh/ytrqnycn7hx1xk7q138h1q540000gn/T/codex-clipboard-947db2f0-5d33-4650-9db1-bdbede7c0efc.png`，1328×270；重点为文件/文件夹、目标与计划模式三项能力及两行文案层级。
+- 原生完整状态：`output/native-composer-qa/composer-goal-plan-resized-right.png`，2960×1880；Electron CSS 视口为 1480×940，`deviceScaleFactor=2`，状态为目标与计划模式均已开启、右栏从 380px 拖至 452px。
+- 原生添加菜单：`output/native-composer-qa/composer-add-menu.png`，2960×1880；状态为 Codex 式加号菜单打开。
+- 输入框同画布比较：`output/native-composer-qa/codex-vs-academic-composer.png`，2700×340；参考与实现都等高归一化到 300px，再比较容器、控制位置和视觉密度。
+- 菜单同画布比较：`output/native-composer-qa/codex-vs-academic-add-menu.png`，2070×350；参考与实现都等高归一化到 310px，再比较层级、图标、文案与浮层边界。
+- 聚焦区域是本轮主要视觉目标，因此完整状态用于验证三栏比例与右栏宽度，两个同画布文件用于精查输入框和添加菜单。
+
+### 14.2 比较历史与修复
+
+- 初始 P1：输入框聚焦时同时出现品牌色外框和文本域焦点阴影，形成用户截图中的红色高亮框。
+- 修复：容器聚焦前后都保持同一中性边框，文本域聚焦阴影明确为 `none`；原生脚本实测前后边框均为 `oklch(0.81 0.008 35)`。
+- 初始 P1：左下角只有不可用的回形针，模型采用“提供商 + 模型”两行并放在左侧；目标与计划模式不存在。
+- 修复：加号浮层真实连接文件/文件夹、对话目标和计划模式；模型入口移动到右下并直接显示当前模型，发送按钮改为 Codex 式圆形上箭头。目标与计划模式写入当前对话并进入模型上下文，不是视觉占位。
+- 初始 P1：右侧研究工作台宽度固定，无法按内容自由调整。
+- 修复：右栏左缘增加拖动热区，支持鼠标、左右方向键和双击恢复 380px，范围 320–620px，并将宽度写入工作区设置。
+- 最终同画布复验没有发现仍需修复的 P0/P1/P2。当轮没有伪造 Codex 参考中的语音、推理强度和“附加 Codex Agent”；语音输入已在后续第 31 节接入真实权限与识别链路，应用内 Skills 继续使用独立真实入口。
+
+### 14.3 原生功能、持久化与安全证据
+
+- 最终类型检查、附件提取冒烟、目标/计划/附件提示词冒烟、生产构建和 Apple Silicon `.app` 打包均通过。
+- 使用打包后的 `.app` 与隔离 `user-data-dir` 运行 `desktop/qa/cdp-composer-layout-smoke.mjs`；没有启动 Chrome，也没有生成 DMG。
+- 原生界面实测：输入框聚焦无额外高亮；添加菜单可见三项真实能力；目标保存成功；计划模式保存成功；模型入口位于输入框右侧；右栏实际从 380px 拖至 452px；控制台 0 个运行时错误。
+- 完全退出并使用同一隔离目录重启后，目标、计划模式、设置值 452px 和实际渲染宽度 452px 全部恢复。
+- 文件/文件夹选择由主进程原生保存面板处理；文本提取限制单文件大小、目录深度、文件数量和总上下文长度，跳过隐藏目录、依赖目录、符号链接与不支持格式。附件内容被标记为不可信数据，不能覆盖证据和安全约束。
+- 最终 `/Applications/学术 Agent.app` 与打包产物的 `app.asar` SHA-256 均为 `3a1166e231a791ea45daeea30326ec92a52b589a3c6b81dce32beae8bec716c6`，安装版已经重新打开。
+
+### 14.4 必查表面
+
+- 字体与排版：继续使用 macOS 系统字体；输入正文 14px，模型 12px，菜单主文案与说明形成清楚的两级层次，长模型名可截断。
+- 间距与布局：输入框使用 20px 圆角、稳定的上下分区；添加入口在左，模型与发送在右；右栏调宽后中央仍保留可用输入区，没有遮挡持久控件。
+- 颜色与 token：移除品牌色聚焦描边；中性边框、浅灰悬停与深色圆形发送按钮接近 Codex 参考，仅计划和目标状态使用已有暖色 token。
+- 图像与图标：全部使用项目现有 `lucide-react` 图标，没有手绘 SVG、字符图标、CSS 图形或占位图片。
+- 文案与内容：菜单只承诺已经连接的数据能力；附件说明为“加入当前对话上下文”，目标说明持续追踪，计划模式说明先分析并形成步骤。
+- 交互与访问：菜单包含 `menu` / `menuitem` / `menuitemcheckbox`，模式带 `aria-checked`；左右调宽器使用 `separator`、方向、当前值和范围语义；按钮保留名称与可见焦点。
+
+## 15. 输入框访问权限与整理菜单回归修复
+
+- 用户问题截图：`/var/folders/nh/ytrqnycn7hx1xk7q138h1q540000gn/T/codex-clipboard-478e4d67-4160-498a-b0af-dd7efef60bc8.png`，702×916；截图中“显示已归档对话”被压成逐字竖排，并与“设置默认研究文件夹”区域重叠。
+- 权限菜单证据：`output/native-composer-qa/composer-access-menu.png`，2960×1880；原生 Electron 视口 1480×940、`deviceScaleFactor=2`，显示“默认权限 / 完全访问权限”、说明文案、选中状态及安全边界。
+- 整理菜单修复证据：`output/native-composer-qa/sidebar-organize-menu-fixed.png`，2960×1880；相同原生视口，菜单宽 248px，7 个操作行均为 34px，最长两项文字高度均为 16.5px，不再竖排或重叠。
+- 原因与修复：旧选择器 `.menu-separator + button` 同时误命中归档操作和文件夹操作，导致不同数量的网格项套用同一个两列模板。现已为文件夹操作使用独立类，所有菜单文字包裹独立 `span` 并禁止逐字换行，长文案在异常窄宽度下使用省略而不是破坏行高。
+- 权限行为：新对话缺省为“默认权限”，模型上下文明确要求本机、MCP、外部或系统操作前询问；“完全访问权限”只允许应用已经实现、用户已配置且 macOS 允许的操作，不等同管理员权限，也不绕过系统弹窗、沙箱、凭证和证据边界。
+- 历史问题：此前原生验收只证明 `full` 字段能够写入和恢复，没有读取 macOS 权限；该结论不能证明系统授权，现已由第 16 节真实权限门禁取代。
+- 必查表面：系统字体、12px 主文案、10px 说明、34px/52px 操作行、中性背景、弱边框和真实 Lucide 图标均保持现有 Codex 式克制风格；没有手绘图形。
+
+## 16. macOS 真实权限中心
+
+- 原生证据：`output/native-permission-qa/system-permission-center.png`，来自更新后的 `/Applications/学术 Agent.app`，显示辅助功能、完全磁盘访问和屏幕录制三项真实系统状态。
+- 实现边界：主进程使用 Electron 官方辅助功能与屏幕录制状态接口；完全磁盘访问没有可由应用自动授予的公开 API，因此只做受保护目录的只读探测，并跳转 macOS“隐私与安全性”中的对应面板，最终授权始终由用户完成。
+- 真实门禁：当前机器原生检测为辅助功能 `denied`、完全磁盘访问 `denied`、屏幕录制 `denied`，因此“启用完全访问”按钮禁用。直接绕过界面调用 `conversation.update(accessMode='full')` 被主进程明确拒绝，工作区没有写入虚假状态。
+- 失效处理：已处于完全访问的对话每次启动模型请求前都会重新检测；权限被撤销时，状态降回默认权限并停止本次请求。
+- 验收：类型检查、生产构建、Apple Silicon `.app` 打包、安装副本哈希一致和隔离原生只读冒烟均通过。为了不擅自更改本机隐私设置，自动验收没有点击“申请”或代替用户勾选系统开关；用户点击“完全访问权限”时会调用真实辅助功能申请接口，并在未授权时打开对应系统设置。
+
+## 17. 项目稿件跨对话上下文
+
+- 根因：对话页发送 `contextScope='project'`，旧实现又明确只在 scope 不是 `project` 时加入章节正文，因此新对话只能看到题目、提纲和文献，无法看到已经生成的稿件。
+- 修复：所有对话范围都加入当前项目最新保存的正文；当前活动章节优先完整提供，其余非同步主稿作为跨对话共享背景加入。输入框状态文案改为“项目与稿件上下文”或“当前章节与项目上下文”。
+- 边界：不同对话仍然只共享项目材料，不共享彼此的聊天历史；由父稿拆出的 `derivedFromSectionId` 同步小节不会在全稿背景中再次重复。长稿按章节和全局字符上限保留头尾并明确标注省略。
+- 验收：类型检查与 `qa/conversation-context-smoke.ts` 通过；测试确认空历史的新对话仍包含已保存的“绪论”正文、版本和字数，同时不重复注入同步子节。本机当前项目只读验证同样通过：1 个已生成主章节进入项目上下文，当前活动章节标记存在。
+
+## 18. 模型 Thinking 推理流
+
+- 根因：提供商适配器已经产生 `reasoning-delta`，但 `ChatCoordinator` 只接受 `text-delta`，其他事件全部跳过；共享消息契约、渲染事件和持久化字段也没有推理内容。
+- 修复：消息新增独立 `reasoningContent`；主进程分别累计、限长、发送并在完成、停止或错误时持久化推理流和正文流。刷新工作区时会合并已经收到的较长流，避免短暂回读覆盖前缀。
+- 界面：模型真实返回推理时显示紧凑的“正在思考/思考过程”折叠块；生成期间自动展开，完成后的历史消息默认折叠，可由用户展开查看。没有推理字段时不显示占位，也不由应用补造。
+- 适配范围：OpenAI 兼容接口支持 `reasoning_content` 和 `reasoning`，Anthropic 支持 `thinking_delta`。
+- 验收：本地 OpenAI-compatible Mock 分别流式返回推理和正文，`qa/reasoning-stream-smoke.ts` 验证收到 31 字符 reasoning、179 字符正文且两条流没有混入。原生 Electron 安装目录应用进一步验证了生成时自动展开、完成后仍可查看；使用同一隔离工作区退出并重新启动后，推理内容、完成状态均成功恢复，历史折叠块默认收起。
+- 证据：`output/native-reasoning-qa/reasoning-stream-completed.png`。该原生验收未启动 Chrome，也没有请求真实厂商 API 或消耗用户额度。
+
+## 19. Codex 式设置工作区
+
+- 原生 Electron 验证设置入口会完整替换研究侧栏；“返回应用”、搜索框、个人、集成、编码和已归档四组导航均存在，15 个设置入口全部可达。
+- “配置”继续承载真实模型提供商、MCP 服务和本地数据页面；没有因为设置重构丢失旧能力。
+- 应用快照、浏览器、电脑控制与编码类入口统一标为“计划中”，并在页面说明当前不会监听全局键盘、截屏、控制应用或修改仓库。
+- 隔离工作区真实创建 1 条归档对话，经“恢复并打开”后归档数量从 1 变为 0，并返回对应研究对话；原生运行时 0 错误。
+- 证据：`output/native-settings-qa/settings-general.png`、`output/native-settings-qa/settings-app-snapshot.png`、`output/native-settings-qa/settings-archived.png`。验收未启动 Chrome，未修改用户真实归档数据，也未生成新的 DMG。
+
+## 20. 章节流式生成与文稿对话跳转
+
+- 原生 Electron 使用本地 OpenAI-compatible 流验证章节正文持续增长：同一次生成早期为 51 字符，260ms 后为 413 字符，完成时为 778 字符；生成期间显示游标、状态、实际模型和自动展开的 Thinking。
+- Thinking 与正文没有混流：生成中显示“正在思考 / Thinking 正在输出”，完成后显示“思考过程 / Thinking 已返回”。官方 DeepSeek V4 请求参数单独验证为 `thinking.type=enabled` 与 `reasoning_effort=high`，通用网关不注入该参数。
+- 模拟网络流中断后，章节进入“生成失败”，界面保留 107 字符正文和已收到的 Thinking，并显示可重新生成或手工编辑的明确错误；原生运行时 0 错误。
+- 从文稿页发送消息后，中心区域立即切换为“对话”，持久消息的 `contextScope` 仍为 `section`，因此切页不会丢失当前章节背景。
+- 证据：`output/native-section-stream-qa/section-streaming.png`、`section-completed.png`、`section-stream-error.png`、`manuscript-message-opened-chat.png`。验收未启动 Chrome、未调用真实 DeepSeek 额度，也未修改用户真实章节。
+
+## 21. 默认 arXiv MCP 与文稿底部视觉验收（2026-08-13）
+
+- 原生 Electron 隔离工作区验证已生成章节编号使用浅绿色底与绿色文字；待生成章节仍保持中性白色，不混淆状态。
+- 文稿滚动到底部后，文稿视图、中心滚动区和输入框托底区域的计算背景色均为 `oklch(0.975 0.002 35)`，没有截图所示的白色断层。
+- 文献库来源下拉默认值为 `mcp:builtin-arxiv-mcp:search_papers`，用户可见标签为“arXiv MCP（默认）”，同时保留 OpenAlex + Crossref。
+- 原生运行时错误为 0；没有启动 Chrome，也没有修改用户真实项目。
+- 证据：`output/native-arxiv-manuscript-polish/manuscript-bottom-and-green-outline.png`、`output/native-arxiv-manuscript-polish/library-default-arxiv-mcp.png`。
+
+## 22. Codex 式外观设置原生验收（2026-08-13）
+
+- 参考用户提供的 Codex 外观页，原生 Electron 安装结构下验证系统/浅色/深色三张主题卡、双调色板、主题预设、导入/复制、字体、半透明侧栏与对比度；控件完整且页面可独立滚动。
+- 深色自定义主题实际计算背景为 `rgb(24, 23, 22)`，浅色自定义主题为 `rgb(255, 250, 243)`；字体、指针、动态效果、字号和字体平滑均在应用根节点真实生效。
+- 底部偏好项包含 2 个 Dock 图标、3 种减少动态模式、12–20px 字号、2 种差异标记和字体平滑；没有以“计划中”按钮冒充完成。
+- 关闭并重新启动隔离的原生应用后，主题、字号、差异模式、指针、字体平滑、背景和字体均恢复。
+- 文稿编辑真实增加一行后，`+/-` 模式显示 `+` 标记且不依赖颜色背景；不是设置页演示状态。
+- 主题复制结果只含 `version/palettes/uiFont/translucentSidebar/contrast`；非法颜色和未知字段会被拒绝，个人偏好不会被主题导入覆盖。
+- 证据：`output/native-appearance-qa/appearance-system.png`、`appearance-dark-custom.png`、`appearance-light-custom.png`、`appearance-preferences-bottom.png`、`appearance-real-manuscript-diff.png`。
+- 边界：原生文件选择框的人工选择/取消未单独自动化；主进程文件选择、64KB 上限、严格解析和受限 IPC 已通过代码与运行检查。本轮未生成新 DMG。
+
+## 23. 输入框“/”能力选择器原生验收（2026-08-13）
+
+- 在原生 Electron 隔离工作区输入 `/`，菜单稳定显示在输入框上方，没有遮挡工具栏或超出 940px 高的窗口。
+- 菜单按 `Skills / MCP 服务` 分组，只显示应用内已启用能力；实测包含“论证链检查”和内置 arXiv MCP，MCP 行显示真实已发现工具数量与连接状态。
+- Enter 键可选择当前项，继续输入 `/arxiv` 能实时过滤并添加 MCP；选择后 slash 查询被清理，菜单关闭且生成两个独立可移除标签。
+- 重复选择同一 Skill 后标签数量仍为 2，去重生效；原生运行时错误为 0。
+- 后端上下文冒烟确认 Skill 指令、MCP 工具名和“没有工具执行结果”的安全边界均进入系统上下文。
+- 证据：`output/native-slash-menu-qa/slash-menu-groups.png`、`slash-selected-chips.png`。
+- 边界：本轮没有实际发起模型请求或 MCP 工具调用；验收证明的是能力选择、持久引用和上下文注入，不把能力发现冒充外部执行。
+
+## 24. Slash MCP 逐工具与真实执行验收（2026-08-13）
+
+- 第 23 节的“MCP 服务”粗粒度菜单已被本轮逐工具交互取代；旧截图仅作为历史证据，不代表当前界面。
+- 原生 Electron 隔离工作区中，`/` 菜单按 `Skills / MCP 工具` 分组，直接展示 `/search_papers`、`/download_paper`、`/list_papers`、`/read_paper`、`/get_abstract` 等实际发现工具。
+- 选中 `/search_papers` 后生成“`/search_papers · arXiv MCP（内置）`”标签，Slash 查询被清理，输入框显示检索词参数提示。重复选择去重，原生运行时错误为 0。
+- 菜单位于 1480×940 原生视口内，计算区域为 `x=279, y=352, width=738, height=430`，未越界或遮挡输入框工具栏。
+- 证据：`output/native-slash-tool-qa/slash-menu-groups.png`、`output/native-slash-tool-qa/slash-selected-chips.png`。
+- 真实链路：在隔离的打包 `.app` 中发送 `/search_papers ti:\"retrieval augmented generation\"`，arXiv MCP 成功返回 5 篇论文，过程页生成已完成的 `MCP · search_papers` 步骤，DeepSeek 基于真实结果完成回复。
+- 审计证据：运行步骤保存 `mcp-tool` 证据、结果 SHA-256 `f341d16049a6d3f3c38a955306bbaa004d5282ce696afe1b3d3536176758c250`、10,717 字符有界结果且 `truncated=false`。验收使用隔离数据目录，未污染用户正式项目。
+- 安全边界：外部返回以 BEGIN/END 不可信 JSON 区块注入；普通自然语言仍不会自动调用 MCP，只有菜单显式选择或 `/工具名` 命令才执行。
+
+## 25. 章节历史版本与重新生成原生验收（2026-08-13）
+
+- 在隔离的打包 `.app` 中连续保存同一章节两次，工作区真实形成第 2、3 版；顶部显示“第 3 版 · 保存时间”和无需确认的“重新生成”。
+- 版本菜单共显示 3 条记录，每条均包含连续编号、生成/保存状态和有效 `<time dateTime>`；当前版使用中性选中背景与绿色勾选，不使用突兀品牌色高亮。
+- 点击第 2 版后，主进程 `activeGenerationVersionId` 切换到对应版本，正文出现第 2 版唯一标记且不再包含第 3 版标记；刷新与项目上下文将继续读取该当前稿。
+- 退出隔离应用并使用同一数据目录重新启动后，第 2 版指针、正文唯一标记、草稿状态和字数均恢复，版本选择不是临时界面状态。
+- 菜单、正文切换、Toast、输入框与三栏布局同时可见；菜单未遮挡重新生成按钮或正文主要阅读区域，原生运行时错误为 0。
+- 仓储回归覆盖旧章节迁移、重新生成不清旧稿、重复生成拒绝、新版本提交、旧版切回、手工保存新版本与项目删除级联；章节同步和项目上下文回归继续通过。
+- 最终打包副本证据：`output/native-section-version-qa-final/section-version-menu.png`、`output/native-section-version-qa-final/section-version-restored-body.png`。
+- 边界：本轮用本机隔离副本和手工保存构造版本，没有再次调用真实模型；模型重新生成使用既有流式链路，版本提交与错误分支由仓储冒烟验证。
+
+## 26. arXiv 中文检索与本轮工具结果原生验收（2026-08-13）
+
+- 在隔离的最终打包 `.app` 中发送中文 Slash 请求“`/paper_search 帮我搜索5篇与此标题强相关的内容`”；应用结合当前研究背景生成英文 arXiv 布尔检索式，没有把中文自然语言指令原样交给上游。
+- 实际执行参数为 `("generative AI" OR "generative artificial intelligence") AND "higher education" AND "mechanism" AND "teaching"`、`max_results=5`，真实返回 3 篇论文，运行步骤为已完成的 `MCP · search_papers`。
+- DeepSeek 明确说明本轮工具已由主进程真实执行，逐篇列出实际返回论文标题和 arXiv ID；不再出现“没有本轮真实返回”“请改用英文后再试”等错误判断。
+- 工具步骤证据保存实际英文参数、3 篇结果、SHA-256 `dc78ebb0b47cc0cdca0b49eac9d26e64875396257c68a8b818b5407245ef064b`，`truncated=false`；运行时错误为 0。
+- 证据：`output/native-arxiv-chinese-query-final/arxiv-chinese-query-completed.png`。最终 `/Applications/学术 Agent.app` 与打包产物的 `app.asar` SHA-256 均为 `f59e66132dd8c50e1f6a312c0b867bbbad3f465e7aa2ff40c728291c6e716ffb`，安装副本已经重新启动。
+- 边界：中文意图会转换为英文查询并最多自动放宽 3 次，但 arXiv 的学科覆盖和命中数量仍由真实上游决定；普通自然语言不会在未显式选择工具时自动调用 MCP。
+
+## 27. 消息内添加文献与右栏即时显示验收（2026-08-14）
+
+- 视觉目标为用户截图中的 GPT 式文字超链接：最终实现只有标题、轻分隔线和下划线文字操作，没有卡片底色、胶囊、阴影或按钮圆角；原生计算样式确认操作圆角数量为 0。
+- 真实 arXiv MCP 本轮返回 2 篇论文，助手消息下方显示“本轮检索论文 / 全部添加”，每篇分别显示“添加到文献栏”；标题、作者、年份与 arXiv 来源保持紧凑层级。
+- 点击第一篇后，消息原位变为绿色“已添加”，第二篇继续保留文字链接；右侧文献标签自动打开，文献总数从 2 增至 3，并显示新增真实论文标题。
+- 主进程仓储冒烟确认：重复添加返回同一记录、伪造候选 ID 被拒绝、批量添加和重启持久化通过；跨项目已纳入文献不再进入当前项目右栏或误标当前消息。
+- 最终打包副本证据：`output/native-message-literature-add-final/message-literature-actions-final.png`；真实工具/模型执行截图：`output/native-message-literature-add/arxiv-chinese-query-completed.png`。原生运行时错误为 0。
+- 最终 `/Applications/学术 Agent.app` 与打包产物的 `app.asar` SHA-256 均为 `54d0e485738bfb20f124a657173702b0a915fd33497319c760b1f3e9681e4b64`，安装副本已使用新进程重新启动。
+
+## 28. 正式工作区版本一致性与历史文献回填验收（2026-08-14）
+
+- 此前第 27 节证明了隔离工作区中“本轮 MCP 返回”的添加链路，但不能证明用户正式工作区中“沿用此前检索”的旧回复已经显示操作；本节补齐该证据边界。
+- 正式工作区“绪论”当前 `section.version=5`、活动历史快照 `number=1`。最终安装版右侧大纲显示“草稿 · 2,292 字 · 第 1 版”，与中央文稿顶部“第 1 版”一致，没有再显示错误的第 5 版。
+- 正式工作区两条旧回复均从同项目、成功且未截断的 MCP 审计证据中精确回填 5 个 arXiv ID；正文中的占位符“arXiv编号”没有被迁移。
+- 最终安装版在用户截图对应回复下真实显示 5 条无圆角“添加到文献栏”和“全部添加”；原生计算样式确认圆角操作数量为 0。
+- 在正式数据副本的隔离目录点击“全部添加”后，5 条操作全部变为“已添加”，右侧文献栏即时从 2 条增加到 7 条并展示新增论文；正式工作区未因点击验收被写入这些记录。
+- 证据：`output/native-outline-version-consistency-final/outline-version-consistency-final.png`、`output/native-message-literature-backfill-final/message-literature-actions-final.png`、`output/native-message-literature-backfill-add-final/message-literature-actions-final.png`。
+- 类型检查、消息文献仓储回归、章节版本回归和生产构建均通过；最终安装副本与构建产物 `app.asar` SHA-256 均为 `27eca4f28b35942f757ce23eb2ee25a75d7049510ae62c188d0f78aa35428060`，Dock 路径应用已重新启动。
+
+## 29. 文献项目分类与可用性边界原生验收（2026-08-14）
+
+- 最终安装版文献库提供“全部文献”和 2 个现有研究项目分类；项目视图只显示本项目记录，全部视图的每张卡片明确展示所属项目或“未分类”。
+- 在原生 Electron 中选取真实项目文献，完整执行“纳入项目 → 取消纳入 → 移出项目”；移出后记录从项目分类消失，并在“全部文献”中以“未分类”保留，没有删除文献数据。
+- 详情页显示文献真实所属项目，并把抽象的“无法判断”改为明确证据边界：当前只核验来源元数据、摘要、原始来源链接和引用映射；缺少可核对全文时不会自动声称文献支持正文主张。
+- 项目分类、状态分段、搜索来源和项目归属标签在 1480×940 原生窗口内无重叠；右侧详情、卡片操作和搜索区保持现有紧凑设计语言。
+- 原生验收运行时错误和警告均为 0；证据：`output/native-literature-project-final/literature-current-project.png`、`output/native-literature-project-final/literature-unclassified-detail.png`。
+- 用户截图与最终界面已并排检查：`output/native-literature-project-final/reference-vs-final.png`。最终安装副本与构建产物 `app.asar` SHA-256 均为 `494b84b20b6639901e3488ff17a255c4f44f95eb99dfe5f409f70d888a1b092f`。
+
+## 30. 文献永久删除原生验收（2026-08-14）
+
+- 文献卡片同时显示“移出项目”和红色文字“删除”：前者保留全局记录，后者进入不可撤销确认，两种语义清晰分离。
+- 演示文献可以打开真实确认框；确认框明确展示将删除的本机数据、不会影响的在线论文和导出文件，以及被正文引用时会阻止删除的边界。
+- 在隔离的最终打包 `.app` 中永久删除演示文献“演示：生成式人工智能与高等教育研究综述”，删除后工作区和“全部文献”页面均不再包含该记录。
+- 确认框、卡片操作、右侧详情和背景遮罩在 1480×940 原生窗口内无重叠或裁切；运行时错误为 0。
+- 证据：`output/native-literature-delete-final/literature-delete-confirm.png`、`output/native-literature-delete-final/literature-demo-deleted.png`。最终安装副本与构建产物 `app.asar` SHA-256 均为 `ec5ffa992bc1e80352ca45029c67da73f81f432f75e0611be616c319269d4d19`。
+
+## 31. 语音输入原生验收与网络错误修复（2026-08-15）
+
+- 最终打包 Electron 输入框在模型选择器与发送按钮之间显示 32px 中性圆形麦克风按钮；空闲态可访问名称为“开始语音输入”，没有使用品牌色抢占输入框焦点。
+- “设置 → 语音输入”显示麦克风权限、macOS 原生语音识别、简体中文 `zh-CN`、请求权限、重新检查和打开系统设置；1480×940 原生窗口内没有重叠、裁切或竖排文案。
+- 旧版虽存在 `webkitSpeechRecognition` 构造器，但用户真实使用返回 `network`，证明“构造器存在”不等于桌面服务可用；旧链路已经移除，历史截图只证明界面，不再作为功能证据。
+- 新版随 `.app` 打包独立的 Speech + AVFAudio 原生组件，状态检查真实返回 `available=true`、`onDevice=true`、`locale=zh-CN`、`authorization=not-determined`；系统支持时要求本机识别。
+- 新版原生桥接与设置页证据：`output/native-voice-status-final/voice-input-composer.png`、`output/native-voice-status-final/voice-input-settings.png`、`output/native-voice-status-final/summary.json`。
+- Info.plist 包含中文 `NSMicrophoneUsageDescription` 与 `NSSpeechRecognitionUsageDescription`；媒体权限只允许可信主窗口音频请求，并拒绝摄像头和非可信页面。
+- 证据：`desktop/output/voice-input/voice-input-composer.png`、`desktop/output/voice-input/voice-input-settings.png`、`desktop/output/voice-input/summary.json`。
+- 类型检查、生产构建和 `.app` 打包通过；打包与安装副本均包含可执行的原生语音组件及两项用途说明。最终 `/Applications/学术 Agent.app` 与构建产物 `app.asar` SHA-256 均为 `503e9d755ed7af3ed64a60be74e637abbc85559f0f7864af4e53c8f3f7868a3d`，安装副本已重新启动并启用 renderer 沙箱。
+- 边界：本机 Speech 授权尚未在 macOS 弹窗中确认，因此真实说话转写需要用户首次点击新版麦克风后选择允许并人工确认；本轮验证原生编译、状态、桥接、打包资源和安装一致性，不把未进行的口述测试写成通过。
+
 final result: passed
