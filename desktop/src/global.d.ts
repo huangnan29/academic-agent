@@ -6,7 +6,11 @@ import type {
   ConversationUpdateInput,
   ExportFormat,
   LiteratureRecord,
+  LiteratureAddFromMessageInput,
+  LiteratureDeleteInput,
+  LiteratureSetProjectInput,
   LiteratureSearchInput,
+  ManuscriptSection,
   McpServerConfig,
   McpServerInput,
   McpResourceReadResult,
@@ -60,6 +64,7 @@ declare global {
       systemPermissions: {
         get(): Promise<SystemPermissionSnapshot>
         requestFullAccess(): Promise<SystemPermissionSnapshot>
+        requestMicrophone(): Promise<SystemPermissionSnapshot>
         openSettings(kind: SystemPermissionKind): Promise<void>
       }
       provider: {
@@ -70,6 +75,9 @@ declare global {
       literature: {
         search(input: LiteratureSearchInput): Promise<LiteratureRecord[]>
         toggle(projectId: string, literatureId: string, included: boolean): Promise<LiteratureRecord>
+        setProject(input: LiteratureSetProjectInput): Promise<LiteratureRecord>
+        delete(input: LiteratureDeleteInput): Promise<void>
+        addFromMessage(input: LiteratureAddFromMessageInput): Promise<LiteratureRecord[]>
       }
       outline: {
         generate(input: OutlineGenerateInput): Promise<OutlineNode[]>
@@ -79,6 +87,7 @@ declare global {
         generate(input: SectionGenerateInput): Promise<void>
         save(sectionId: string, content: string): Promise<void>
         setActive(sectionId: string): Promise<WorkspaceState>
+        selectVersion(sectionId: string, versionId: string): Promise<ManuscriptSection>
         onEvent(listener: (event: SectionStreamEvent) => void): () => void
       }
       chat: {

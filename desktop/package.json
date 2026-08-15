@@ -63,7 +63,11 @@
       "artifactName": "Academic-Agent-${version}-${arch}.${ext}",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
-      "identity": null
+      "identity": null,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "学术 Agent 使用麦克风将用户主动说出的内容转写到当前输入框。",
+        "NSSpeechRecognitionUsageDescription": "学术 Agent 使用系统语音识别将用户主动说出的内容转换为文字。"
+      }
     },
     "dmg": {
       "title": "学术 Agent ${version}",

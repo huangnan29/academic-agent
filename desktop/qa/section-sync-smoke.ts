@@ -137,12 +137,13 @@ function legacyState(): WorkspaceState {
     providers: [],
     literature: [],
     outlines: { [projectId]: outline },
-    sections: [
+  sections: [
       section('section-root', 'chapter-1', '第一章 绪论', 1, rootContent),
       section('section-child', 'chapter-1-1', '1.1 研究背景', 2),
       section('section-grandchild', 'chapter-1-1-1', '1.1.1 技术演进', 3),
       section('section-sibling', 'chapter-1-2', '1.2 研究意义', 2),
-    ],
+  ],
+  sectionVersions: [],
     citations: [],
     runs: [],
     mcpServers: [],
@@ -240,6 +241,15 @@ async function main() {
       state.sections.find((item) => item.id === 'section-grandchild')?.content ?? '',
       /这是用户修改后的技术演进内容/,
     )
+    for (const synchronizedId of ['section-root', 'section-grandchild']) {
+      const synchronized = state.sections.find((item) => item.id === synchronizedId)
+      const activeVersion = state.sectionVersions.find(
+        (item) => item.id === synchronized?.activeGenerationVersionId,
+      )
+      assert.equal(activeVersion?.sectionId, synchronizedId)
+      assert.equal(activeVersion?.source, 'derived', '同步改写的父稿或子稿必须形成独立版本')
+      assert.equal(activeVersion?.content, synchronized?.content)
+    }
 
     await repository.updateSection('section-grandchild', {
       content: '#### 1.1.1 技术演进\n\n这是此前独立编辑的三级内容。',

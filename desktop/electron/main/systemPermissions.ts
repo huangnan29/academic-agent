@@ -15,6 +15,8 @@ const SETTINGS_URLS: Record<SystemPermissionKind, string> = {
     'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
   'screen-recording':
     'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+  microphone:
+    'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone',
 }
 
 const PROTECTED_DIRECTORIES = [
@@ -38,12 +40,16 @@ export class SystemPermissionService {
     const screenRecording = normalizeMediaStatus(
       systemPreferences.getMediaAccessStatus('screen'),
     )
+    const microphone = normalizeMediaStatus(
+      systemPreferences.getMediaAccessStatus('microphone'),
+    )
 
     return {
       platform: 'macos',
       accessibility,
       fullDiskAccess,
       screenRecording,
+      microphone,
       fullAccessReady:
         accessibility === 'granted' && fullDiskAccess === 'granted',
       checkedAt: new Date().toISOString(),
@@ -64,6 +70,18 @@ export class SystemPermissionService {
       await this.openSettings('full-disk-access')
     }
     return next
+  }
+
+  async requestMicrophone(): Promise<SystemPermissionSnapshot> {
+    if (process.platform !== 'darwin') return unsupportedSnapshot()
+
+    const current = systemPreferences.getMediaAccessStatus('microphone')
+    if (current === 'not-determined') {
+      await systemPreferences.askForMediaAccess('microphone')
+    } else if (current !== 'granted') {
+      await this.openSettings('microphone')
+    }
+    return this.snapshot()
   }
 
   async openSettings(kind: SystemPermissionKind): Promise<void> {
@@ -107,6 +125,7 @@ function unsupportedSnapshot(): SystemPermissionSnapshot {
     accessibility: 'unsupported',
     fullDiskAccess: 'unsupported',
     screenRecording: 'unsupported',
+    microphone: 'unsupported',
     fullAccessReady: false,
     checkedAt: new Date().toISOString(),
   }

@@ -8,8 +8,9 @@ const DEFAULT_ARXIV_MCP_SEARCH_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
     query: { type: 'string', description: 'arXiv 检索式' },
-    max_results: { type: 'integer', minimum: 1, maximum: 50, default: 5 },
+    max_results: { type: 'integer', minimum: 1, maximum: 50, default: 10 },
     date_from: { type: 'string', description: '起始日期 YYYY-MM-DD' },
+    date_to: { type: 'string', description: '结束日期 YYYY-MM-DD' },
     categories: { type: 'array', items: { type: 'string' } },
     sort_by: { type: 'string', enum: ['relevance', 'date'], default: 'relevance' },
   },

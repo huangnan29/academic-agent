@@ -13,6 +13,7 @@ import type {
   LiteratureRecord,
   McpServerConfig,
   ManuscriptSection,
+  ManuscriptSectionVersion,
   OutlineNode,
   Project,
   ProviderProfile,
@@ -34,8 +35,297 @@ import {
   createDefaultArxivMcpServer,
   ensureDefaultArxivMcpServer,
 } from '../../../shared/defaultMcp'
+import { resolveHistoricalMessageLiteratureCandidates } from '../../main/mcpLiterature'
+import { extractCitationIds } from '../pipeline'
 
 const now = () => new Date().toISOString()
+
+function normalizeLiteratureTitle(value: string): string {
+  const normalized = value
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[\p{P}\p{S}\s]+/gu, '')
+  return normalized || value.normalize('NFKC').toLocaleLowerCase().trim()
+}
+
+function literatureVerificationRank(status: LiteratureRecord['verificationStatus']): number {
+  if (status === 'verified-metadata') return 3
+  if (status === 'abstract-only') return 2
+  if (status === 'unverified') return 1
+  return 0
+}
+
+/** 重复检索只允许更可信来源替换元数据；同级或更低可信来源只能补齐空字段。 */
+function mergeLiteratureRecord(
+  existing: LiteratureRecord,
+  incoming: LiteratureRecord,
+): LiteratureRecord {
+  const incomingIsMoreTrusted = literatureVerificationRank(incoming.verificationStatus)
+    > literatureVerificationRank(existing.verificationStatus)
+  const merged = incomingIsMoreTrusted
+    ? { ...existing, ...incoming }
+    : {
+        ...existing,
+        authors: existing.authors.length > 0 ? existing.authors : incoming.authors,
+        year: existing.year ?? incoming.year,
+        venue: existing.venue || incoming.venue,
+        abstract: existing.abstract || incoming.abstract,
+        doi: existing.doi || incoming.doi,
+        url: existing.url || incoming.url,
+      }
+  return {
+    ...merged,
+    id: existing.id,
+    projectId: existing.projectId,
+    included: existing.included,
+    createdAt: existing.createdAt,
+    updatedAt: now(),
+  }
+}
+
+function outlineReferencesLiterature(nodes: OutlineNode[], literatureId: string): boolean {
+  return nodes.some((node) => (
+    node.citationIds.includes(literatureId)
+    || outlineReferencesLiterature(node.children, literatureId)
+  ))
+}
+
+function literatureIsReferenced(
+  state: WorkspaceState,
+  record: LiteratureRecord,
+): boolean {
+  if (!record.projectId) return false
+  if (state.citations.some((citation) => (
+    citation.projectId === record.projectId && citation.literatureId === record.id
+  ))) return true
+  if (outlineReferencesLiterature(state.outlines[record.projectId] ?? [], record.id)) return true
+  return state.sections.some((section) => (
+    section.projectId === record.projectId
+    && extractCitationIds(section.content).includes(record.id)
+  ))
+}
+
+function promoteProjectToLive(state: WorkspaceState, projectId: string): boolean {
+  const project = state.projects.find((item) => item.id === projectId)
+  if (!project || project.origin !== 'demo') return false
+  const liveProviderIds = new Set(
+    state.providers.filter((provider) => provider.origin !== 'demo').map((provider) => provider.id),
+  )
+  project.origin = 'live'
+  project.verificationStatus = 'unverified'
+  project.updatedAt = now()
+  for (const conversation of state.conversations.filter((item) => item.projectId === projectId)) {
+    const hasLiveMessages = state.messages.some((message) => (
+      message.conversationId === conversation.id && message.origin !== 'demo'
+    ))
+    if (!hasLiveMessages) continue
+    conversation.origin = 'live'
+    conversation.verificationStatus = 'unverified'
+    conversation.updatedAt = now()
+  }
+  for (const section of state.sections.filter((item) => item.projectId === projectId)) {
+    if (!section.generationProviderId || !liveProviderIds.has(section.generationProviderId)) continue
+    section.origin = 'live'
+    section.verificationStatus = 'unverified'
+  }
+  if (state.settings.activeProjectId === projectId) state.settings.demoMode = false
+  return true
+}
+
+/** 用户已经在演示项目中产生真实模型或真实文献活动时，将该项目安全升级为正式研究。 */
+function promoteConvertedDemoProjects(state: WorkspaceState): boolean {
+  const liveProviderIds = new Set(
+    state.providers.filter((provider) => provider.origin !== 'demo').map((provider) => provider.id),
+  )
+  let changed = false
+  for (const project of state.projects) {
+    if (project.origin !== 'demo') continue
+    const hasLiveLiterature = state.literature.some(
+      (record) => record.projectId === project.id && record.origin !== 'demo',
+    )
+    const hasLiveModelReply = state.messages.some(
+      (message) => message.projectId === project.id
+        && message.role === 'assistant'
+        && message.status === 'completed'
+        && Boolean(message.content.trim())
+        && Boolean(message.providerId && liveProviderIds.has(message.providerId)),
+    )
+    const hasLiveSection = state.sections.some((section) => (
+      section.projectId === project.id
+      && Boolean(section.content.trim())
+      && Boolean(section.generationProviderId && liveProviderIds.has(section.generationProviderId))
+    ))
+    if (hasLiveLiterature || hasLiveModelReply || hasLiveSection) {
+      changed = promoteProjectToLive(state, project.id) || changed
+    }
+  }
+  return changed
+}
+
+function backfillHistoricalMessageLiteratureCandidates(state: WorkspaceState): boolean {
+  let changed = false
+  for (const message of state.messages) {
+    if (message.role !== 'assistant') continue
+    const resolved = resolveHistoricalMessageLiteratureCandidates(state, message)
+    if (resolved.length === 0) continue
+    const current = message.literatureCandidates ?? []
+    const known = new Set(current.map((candidate) => candidate.id))
+    const additions = resolved.filter((candidate) => !known.has(candidate.id))
+    if (additions.length === 0) continue
+    message.literatureCandidates = [...current, ...additions].slice(0, 50)
+    changed = true
+  }
+  return changed
+}
+
+function sectionWordCount(content: string): number {
+  return content.replace(/\s+/g, '').length
+}
+
+function createSectionVersion(
+  state: WorkspaceState,
+  section: ManuscriptSection,
+  source: ManuscriptSectionVersion['source'],
+  timestamp: string,
+  status: ManuscriptSectionVersion['status'] = section.status === 'verified' ? 'verified' : section.status === 'error' ? 'error' : 'draft',
+): ManuscriptSectionVersion {
+  const current = state.sectionVersions
+    .filter((item) => item.sectionId === section.id)
+    .sort((left, right) => right.number - left.number)[0]
+  const version: ManuscriptSectionVersion = {
+    id: randomUUID(),
+    projectId: section.projectId,
+    sectionId: section.id,
+    number: (current?.number ?? 0) + 1,
+    source,
+    content: section.content,
+    wordCount: sectionWordCount(section.content),
+    status,
+    reasoningContent: section.reasoningContent,
+    generationProviderId: section.generationProviderId,
+    generationModel: section.generationModel,
+    thinkingRequested: section.thinkingRequested,
+    origin: section.origin,
+    verificationStatus: section.verificationStatus,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+  state.sectionVersions.push(version)
+  section.activeGenerationVersionId = version.id
+  return version
+}
+
+function activeSectionVersion(
+  state: WorkspaceState,
+  section: ManuscriptSection,
+): ManuscriptSectionVersion | undefined {
+  return state.sectionVersions.find(
+    (item) => item.id === section.activeGenerationVersionId && item.sectionId === section.id,
+  )
+}
+
+function preserveCurrentSectionVersion(
+  state: WorkspaceState,
+  section: ManuscriptSection,
+  source: ManuscriptSectionVersion['source'],
+  timestamp: string,
+): ManuscriptSectionVersion | undefined {
+  if (!section.content.trim()) return undefined
+  const active = activeSectionVersion(state, section)
+  if (active?.content === section.content) return active
+  return createSectionVersion(state, section, source, timestamp)
+}
+
+function clearMismatchedActiveSectionVersions(state: WorkspaceState, projectId: string): void {
+  for (const section of state.sections) {
+    if (section.projectId !== projectId || !section.activeGenerationVersionId) continue
+    const active = activeSectionVersion(state, section)
+    if (!active || active.content !== section.content) section.activeGenerationVersionId = undefined
+  }
+}
+
+function preserveProjectSectionVersions(
+  state: WorkspaceState,
+  projectId: string,
+): Map<string, string> {
+  const previousContent = new Map<string, string>()
+  for (const section of state.sections) {
+    if (section.projectId !== projectId) continue
+    previousContent.set(section.id, section.content)
+    preserveCurrentSectionVersion(state, section, 'saved', section.updatedAt)
+  }
+  return previousContent
+}
+
+function recordSynchronizedSectionVersions(
+  state: WorkspaceState,
+  projectId: string,
+  targetSectionId: string,
+  previousContent: Map<string, string>,
+  timestamp: string,
+): void {
+  for (const section of state.sections) {
+    if (
+      section.projectId !== projectId
+      || section.id === targetSectionId
+      || previousContent.get(section.id) === section.content
+    ) continue
+    if (section.content.trim()) createSectionVersion(state, section, 'derived', timestamp)
+    else section.activeGenerationVersionId = undefined
+  }
+  clearMismatchedActiveSectionVersions(state, projectId)
+}
+
+function normalizeSectionVersions(state: WorkspaceState): void {
+  const sectionsById = new Map(state.sections.map((section) => [section.id, section]))
+  state.sectionVersions = state.sectionVersions
+    .filter((item) => sectionsById.get(item.sectionId)?.projectId === item.projectId)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+
+  const grouped = new Map<string, ManuscriptSectionVersion[]>()
+  for (const version of state.sectionVersions) {
+    const list = grouped.get(version.sectionId) ?? []
+    list.push(version)
+    grouped.set(version.sectionId, list)
+  }
+  for (const versions of grouped.values()) {
+    versions.sort((left, right) => left.number - right.number || left.createdAt.localeCompare(right.createdAt))
+    versions.forEach((version, index) => { version.number = index + 1 })
+  }
+
+  for (const section of state.sections) {
+    if (section.status === 'generating') {
+      section.status = section.content.trim() ? 'draft' : 'pending'
+      section.generationError = '上次章节生成因应用退出而中断，原稿已经保留。'
+    }
+    let versions = grouped.get(section.id) ?? []
+    if (versions.length === 0 && section.content.trim()) {
+      const migrated: ManuscriptSectionVersion = {
+        id: `migrated-${section.id}`,
+        projectId: section.projectId,
+        sectionId: section.id,
+        number: 1,
+        source: 'migrated',
+        content: section.content,
+        wordCount: sectionWordCount(section.content),
+        status: section.status === 'verified' ? 'verified' : section.status === 'error' ? 'error' : 'draft',
+        reasoningContent: section.reasoningContent,
+        generationProviderId: section.generationProviderId,
+        generationModel: section.generationModel,
+        thinkingRequested: section.thinkingRequested,
+        origin: section.origin,
+        verificationStatus: section.verificationStatus,
+        createdAt: section.updatedAt,
+        updatedAt: section.updatedAt,
+      }
+      state.sectionVersions.push(migrated)
+      versions = [migrated]
+    }
+    const selected = versions.find((item) => item.id === section.activeGenerationVersionId)
+      ?? [...versions].reverse().find((item) => item.content === section.content)
+    section.activeGenerationVersionId = selected?.id
+  }
+}
 
 function isSelectableProvider(provider: ProviderProfile): boolean {
   return provider.enabled && (provider.origin === 'demo' || provider.lastHealth === 'connected')
@@ -207,6 +497,7 @@ function demoState(): WorkspaceState {
       ],
     },
     sections: [],
+    sectionVersions: [],
     citations: [],
     runs: [],
     mcpServers: [createDefaultArxivMcpServer(timestamp)],
@@ -250,6 +541,7 @@ function normalizeState(candidate: Partial<WorkspaceState>): WorkspaceState {
     literature: candidate.literature ?? base.literature,
     outlines: candidate.outlines ?? base.outlines,
     sections: candidate.sections ?? [],
+    sectionVersions: Array.isArray(candidate.sectionVersions) ? candidate.sectionVersions : [],
     citations: candidate.citations ?? [],
     runs: candidate.runs ?? [],
     mcpServers: ensureDefaultArxivMcpServer(candidate.mcpServers ?? base.mcpServers, now()),
@@ -294,6 +586,7 @@ function normalizeState(candidate: Partial<WorkspaceState>): WorkspaceState {
     : normalized.settings.activeProjectId
       ? [normalized.settings.activeProjectId]
       : []
+  normalizeSectionVersions(normalized)
   return normalized
 }
 
@@ -311,8 +604,11 @@ export class WorkspaceRepository {
       this.state = normalizeState(parsed)
       let changed = JSON.stringify(parsed) !== JSON.stringify(this.state)
       changed = synchronizeActiveModelSelection(this.state) || changed
+      changed = promoteConvertedDemoProjects(this.state) || changed
       // 兼容旧版本：父章节已经包含子标题时，只回填对应的空白子章节。
       changed = synchronizeDerivedSections(this.state) || changed
+      normalizeSectionVersions(this.state)
+      changed = backfillHistoricalMessageLiteratureCandidates(this.state) || changed
       for (const run of this.state.runs) {
         if (run.status !== 'queued' && run.status !== 'running') continue
         run.status = 'cancelled'
@@ -674,6 +970,7 @@ export class WorkspaceRepository {
       )
       state.literature = state.literature.filter((item) => item.projectId !== projectId)
       state.sections = state.sections.filter((item) => item.projectId !== projectId)
+      state.sectionVersions = state.sectionVersions.filter((item) => item.projectId !== projectId)
       state.citations = state.citations.filter(
         (item) => item.projectId !== projectId && !sectionIds.has(item.sectionId),
       )
@@ -792,23 +1089,107 @@ export class WorkspaceRepository {
     return provider ? structuredClone(provider) : undefined
   }
 
+  /** 用户明确调用真实模型后，将内置演示研究升级为可继续使用的正式研究。 */
+  async promoteProjectForProvider(projectId: string, providerId: string): Promise<void> {
+    const project = this.state.projects.find((item) => item.id === projectId)
+    const provider = this.state.providers.find((item) => item.id === providerId)
+    if (!project || !provider) throw new Error('项目或模型提供商不存在。')
+    if (project.origin !== 'demo' || provider.origin === 'demo') return
+    await this.mutate((state) => {
+      promoteProjectToLive(state, projectId)
+    })
+  }
+
   async addLiterature(records: LiteratureRecord[], projectId?: string): Promise<LiteratureRecord[]> {
     return this.mutate((state) => {
       if (projectId && !state.projects.some((project) => project.id === projectId)) {
         throw new Error('项目不存在或已经被移除。')
       }
       const incoming = records.map((record) => ({ ...record, projectId: projectId ?? record.projectId }))
+      if (projectId && incoming.some((record) => record.origin !== 'demo')) {
+        promoteProjectToLive(state, projectId)
+      }
+      const saved: LiteratureRecord[] = []
       for (const record of incoming) {
         const index = state.literature.findIndex(
           (item) =>
             item.projectId === record.projectId &&
             ((item.doi && record.doi && item.doi.toLowerCase() === record.doi.toLowerCase()) ||
-              item.title.trim().toLowerCase() === record.title.trim().toLowerCase()),
+              normalizeLiteratureTitle(item.title) === normalizeLiteratureTitle(record.title)),
         )
-        if (index >= 0) state.literature[index] = { ...state.literature[index], ...record }
-        else state.literature.push(record)
+        if (index >= 0) {
+          const existing = state.literature[index]
+          state.literature[index] = mergeLiteratureRecord(existing, record)
+          saved.push(state.literature[index])
+        } else {
+          const uniqueRecord = state.literature.some((item) => item.id === record.id)
+            ? { ...record, id: randomUUID() }
+            : record
+          state.literature.push(uniqueRecord)
+          saved.push(uniqueRecord)
+        }
       }
-      return incoming
+      return saved
+    })
+  }
+
+  /**
+   * 只允许把助手消息中由真实 MCP 结果保存的候选加入对应项目文献栏。
+   * 渲染层不能提交标题、DOI 等任意元数据，避免伪造或跨项目写入。
+   */
+  async addLiteratureFromMessage(
+    messageId: string,
+    candidateIds: string[],
+  ): Promise<LiteratureRecord[]> {
+    return this.mutate((state) => {
+      const message = state.messages.find((item) => item.id === messageId && item.role === 'assistant')
+      if (!message) throw new Error('助手消息不存在或已经被移除。')
+      if (!state.projects.some((project) => project.id === message.projectId)) {
+        throw new Error('消息所属项目不存在或已经被移除。')
+      }
+
+      const uniqueIds = [...new Set(candidateIds)]
+      if (uniqueIds.length === 0 || uniqueIds.length > 50) {
+        throw new Error('请选择 1–50 篇消息中的文献。')
+      }
+      const candidates = uniqueIds.map((candidateId) => {
+        const candidate = message.literatureCandidates?.find((item) => item.id === candidateId)
+        if (!candidate) throw new Error('所选文献不属于这条消息，请重新选择。')
+        return candidate
+      })
+      promoteProjectToLive(state, message.projectId)
+
+      const addedAt = now()
+      return candidates.map((candidate) => {
+        const existing = state.literature.find((item) => (
+          item.projectId === message.projectId
+          && (
+            (item.doi && candidate.doi && item.doi.toLocaleLowerCase() === candidate.doi.toLocaleLowerCase())
+            || normalizeLiteratureTitle(item.title) === normalizeLiteratureTitle(candidate.title)
+          )
+        ))
+        if (existing) return existing
+
+        const record: LiteratureRecord = {
+          id: randomUUID(),
+          projectId: message.projectId,
+          title: candidate.title,
+          authors: [...candidate.authors],
+          year: candidate.year,
+          venue: candidate.venue,
+          abstract: candidate.abstract,
+          doi: candidate.doi,
+          url: candidate.url,
+          source: 'mcp',
+          included: false,
+          origin: 'live',
+          verificationStatus: 'unverified',
+          createdAt: addedAt,
+          updatedAt: addedAt,
+        }
+        state.literature.push(record)
+        return record
+      })
     })
   }
 
@@ -821,10 +1202,6 @@ export class WorkspaceRepository {
       if (!state.projects.some((project) => project.id === projectId)) {
         throw new Error('项目不存在或已经被移除。')
       }
-      const project = state.projects.find((item) => item.id === projectId)
-      if (included && project?.origin === 'demo') {
-        throw new Error('演示项目不能纳入真实文献，请先新建研究项目。')
-      }
       const record = state.literature.find(
         (item) => item.id === literatureId && (!item.projectId || item.projectId === projectId),
       )
@@ -832,10 +1209,74 @@ export class WorkspaceRepository {
       if (included && record.origin === 'demo') {
         throw new Error('演示文献不可用于正式引用。')
       }
+      if (!included && record.included && literatureIsReferenced(state, record)) {
+        throw new Error('该文献仍被大纲或正文引用，不能取消纳入。请先移除对应引用。')
+      }
+      if (included && record.origin !== 'demo') promoteProjectToLive(state, projectId)
       record.projectId = projectId
       record.included = included
       record.updatedAt = now()
       return record
+    })
+  }
+
+  async setLiteratureProject(
+    literatureId: string,
+    sourceProjectId?: string | null,
+    targetProjectId?: string,
+  ): Promise<LiteratureRecord> {
+    return this.mutate((state) => {
+      const record = state.literature.find((item) => (
+        item.id === literatureId
+        && (
+          sourceProjectId === undefined
+          || (sourceProjectId === null ? item.projectId === undefined : item.projectId === sourceProjectId)
+        )
+      ))
+      if (!record) throw new Error('文献记录不存在。')
+      if (targetProjectId && !state.projects.some((project) => project.id === targetProjectId)) {
+        throw new Error('目标项目不存在或已经被移除。')
+      }
+      if (record.projectId !== targetProjectId && literatureIsReferenced(state, record)) {
+        throw new Error('该文献仍被大纲或正文引用，请先移除对应引用后再移动。')
+      }
+      if (targetProjectId) {
+        const duplicated = state.literature.find((item) => (
+          item.id !== record.id
+          && item.projectId === targetProjectId
+          && (
+            (item.doi && record.doi && item.doi.toLocaleLowerCase() === record.doi.toLocaleLowerCase())
+            || normalizeLiteratureTitle(item.title) === normalizeLiteratureTitle(record.title)
+          )
+        ))
+        if (duplicated) throw new Error('目标项目已经存在同一篇文献。')
+        if (record.origin !== 'demo') promoteProjectToLive(state, targetProjectId)
+      }
+      record.projectId = targetProjectId
+      record.included = false
+      record.updatedAt = now()
+      return record
+    })
+  }
+
+  async deleteLiterature(
+    literatureId: string,
+    sourceProjectId?: string | null,
+  ): Promise<void> {
+    return this.mutate((state) => {
+      const index = state.literature.findIndex((item) => (
+        item.id === literatureId
+        && (
+          sourceProjectId === undefined
+          || (sourceProjectId === null ? item.projectId === undefined : item.projectId === sourceProjectId)
+        )
+      ))
+      if (index < 0) throw new Error('文献记录不存在。')
+      const record = state.literature[index]
+      if (literatureIsReferenced(state, record)) {
+        throw new Error('该文献仍被大纲或正文引用，请先移除对应引用后再删除。')
+      }
+      state.literature.splice(index, 1)
     })
   }
 
@@ -897,8 +1338,12 @@ export class WorkspaceRepository {
     return this.mutate((state) => {
       const section = state.sections.find((item) => item.id === sectionId)
       if (!section) throw new Error('论文章节不存在。')
+      if (section.status === 'generating') throw new Error('章节正在生成，请等待完成后再保存。')
       const timestamp = now()
+      const previousContent = preserveProjectSectionVersions(state, section.projectId)
       const saved = saveSectionContentInState(state, sectionId, content, timestamp)
+      recordSynchronizedSectionVersions(state, section.projectId, sectionId, previousContent, timestamp)
+      preserveCurrentSectionVersion(state, saved, 'saved', timestamp)
       const project = state.projects.find((item) => item.id === section.projectId)
       if (project) {
         project.status = 'writing'
@@ -906,6 +1351,129 @@ export class WorkspaceRepository {
         project.updatedAt = timestamp
       }
       return saved
+    })
+  }
+
+  async beginSectionGeneration(
+    sectionId: string,
+    metadata: Pick<ManuscriptSection, 'generationProviderId' | 'generationModel' | 'thinkingRequested'>,
+  ): Promise<{ section: ManuscriptSection; baseVersion: number }> {
+    return this.mutate((state) => {
+      const section = state.sections.find((item) => item.id === sectionId)
+      if (!section) throw new Error('论文章节不存在。')
+      if (section.status === 'generating') throw new Error('该章节已经在生成中。')
+      const timestamp = now()
+      preserveProjectSectionVersions(state, section.projectId)
+      const baseVersion = section.version
+      Object.assign(section, metadata, {
+        status: 'generating' as const,
+        generationError: undefined,
+        updatedAt: timestamp,
+      })
+      return { section, baseVersion }
+    })
+  }
+
+  async commitSectionGeneration(
+    sectionId: string,
+    expectedVersion: number,
+    content: string,
+    metadata: Pick<ManuscriptSection, 'reasoningContent' | 'generationProviderId' | 'generationModel' | 'thinkingRequested'> & {
+      source: 'generated' | 'partial'
+      generationError?: string
+    },
+  ): Promise<ManuscriptSection> {
+    return this.mutate((state) => {
+      const section = state.sections.find((item) => item.id === sectionId)
+      if (!section) throw new Error('论文章节不存在。')
+      if (section.version !== expectedVersion || section.status !== 'generating') {
+        throw new Error('章节在生成期间已经发生变化，新结果未覆盖当前稿。')
+      }
+      const timestamp = now()
+      const previousContent = preserveProjectSectionVersions(state, section.projectId)
+      const saved = saveSectionContentInState(state, sectionId, content, timestamp)
+      Object.assign(saved, metadata, {
+        status: metadata.source === 'partial' ? 'error' as const : 'draft' as const,
+        updatedAt: timestamp,
+      })
+      const generatedWithLiveProvider = Boolean(
+        metadata.generationProviderId
+        && state.providers.some((provider) => (
+          provider.id === metadata.generationProviderId && provider.origin !== 'demo'
+        )),
+      )
+      if (generatedWithLiveProvider) {
+        for (const projectSection of state.sections.filter((item) => item.projectId === section.projectId)) {
+          if (
+            projectSection.id !== saved.id
+            && previousContent.get(projectSection.id) === projectSection.content
+          ) continue
+          projectSection.origin = 'live'
+          projectSection.verificationStatus = 'unverified'
+        }
+      }
+      recordSynchronizedSectionVersions(state, section.projectId, sectionId, previousContent, timestamp)
+      createSectionVersion(
+        state,
+        saved,
+        metadata.source,
+        timestamp,
+        metadata.source === 'partial' ? 'error' : 'draft',
+      )
+      const project = state.projects.find((item) => item.id === section.projectId)
+      if (project) {
+        project.status = 'writing'
+        project.activeSectionId = section.id
+        project.updatedAt = timestamp
+      }
+      return saved
+    })
+  }
+
+  async failSectionGeneration(
+    sectionId: string,
+    expectedVersion: number,
+    patch: Pick<ManuscriptSection, 'reasoningContent' | 'generationProviderId' | 'generationModel' | 'thinkingRequested' | 'generationError'>,
+  ): Promise<ManuscriptSection> {
+    return this.mutate((state) => {
+      const section = state.sections.find((item) => item.id === sectionId)
+      if (!section) throw new Error('论文章节不存在。')
+      if (section.version !== expectedVersion || section.status !== 'generating') return section
+      Object.assign(section, patch, { status: 'error' as const, updatedAt: now() })
+      return section
+    })
+  }
+
+  async selectSectionVersion(sectionId: string, versionId: string): Promise<ManuscriptSection> {
+    return this.mutate((state) => {
+      const section = state.sections.find((item) => item.id === sectionId)
+      if (!section) throw new Error('论文章节不存在。')
+      if (section.status === 'generating') throw new Error('章节正在生成，暂时不能切换历史版本。')
+      const version = state.sectionVersions.find(
+        (item) => item.id === versionId && item.sectionId === sectionId && item.projectId === section.projectId,
+      )
+      if (!version) throw new Error('章节历史版本不存在。')
+      const timestamp = now()
+      const previousContent = preserveProjectSectionVersions(state, section.projectId)
+      const selected = saveSectionContentInState(state, sectionId, version.content, timestamp)
+      Object.assign(selected, {
+        status: version.status,
+        reasoningContent: version.reasoningContent,
+        generationProviderId: version.generationProviderId,
+        generationModel: version.generationModel,
+        thinkingRequested: version.thinkingRequested,
+        generationError: version.source === 'partial' ? '这是一次未完整生成的历史版本。' : undefined,
+        activeGenerationVersionId: version.id,
+        updatedAt: timestamp,
+      })
+      recordSynchronizedSectionVersions(state, section.projectId, sectionId, previousContent, timestamp)
+      selected.activeGenerationVersionId = version.id
+      const project = state.projects.find((item) => item.id === section.projectId)
+      if (project) {
+        project.activeSectionId = section.id
+        project.updatedAt = timestamp
+      }
+      return selected
     })
   }
 

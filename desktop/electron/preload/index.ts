@@ -6,6 +6,9 @@ import type {
   ChatStreamEvent,
   ConversationUpdateInput,
   ExportFormat,
+  LiteratureAddFromMessageInput,
+  LiteratureDeleteInput,
+  LiteratureSetProjectInput,
   LiteratureSearchInput,
   McpServerInput,
   OutlineGenerateInput,
@@ -60,6 +63,7 @@ const api = {
   systemPermissions: {
     get: () => ipcRenderer.invoke(IPC.systemPermissionsGet),
     requestFullAccess: () => ipcRenderer.invoke(IPC.systemPermissionsRequestFullAccess),
+    requestMicrophone: () => ipcRenderer.invoke(IPC.systemPermissionsRequestMicrophone),
     openSettings: (kind: SystemPermissionKind) =>
       ipcRenderer.invoke(IPC.systemPermissionsOpenSettings, kind),
   },
@@ -72,6 +76,12 @@ const api = {
     search: (input: LiteratureSearchInput) => ipcRenderer.invoke(IPC.literatureSearch, input),
     toggle: (projectId: string, literatureId: string, included: boolean) =>
       ipcRenderer.invoke(IPC.literatureToggle, projectId, literatureId, included),
+    setProject: (input: LiteratureSetProjectInput) =>
+      ipcRenderer.invoke(IPC.literatureSetProject, input),
+    delete: (input: LiteratureDeleteInput) =>
+      ipcRenderer.invoke(IPC.literatureDelete, input),
+    addFromMessage: (input: LiteratureAddFromMessageInput) =>
+      ipcRenderer.invoke(IPC.literatureAddFromMessage, input),
   },
   outline: {
     generate: (input: OutlineGenerateInput) => ipcRenderer.invoke(IPC.outlineGenerate, input),
@@ -83,6 +93,8 @@ const api = {
     save: (sectionId: string, content: string) =>
       ipcRenderer.invoke(IPC.sectionSave, sectionId, content),
     setActive: (sectionId: string) => ipcRenderer.invoke(IPC.sectionSetActive, sectionId),
+    selectVersion: (sectionId: string, versionId: string) =>
+      ipcRenderer.invoke(IPC.sectionSelectVersion, sectionId, versionId),
     onEvent: (listener: (event: SectionStreamEvent) => void) => {
       const wrapped = (_event: Electron.IpcRendererEvent, payload: SectionStreamEvent) => listener(payload)
       ipcRenderer.on(IPC.sectionEvent, wrapped)

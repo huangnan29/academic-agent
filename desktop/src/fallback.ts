@@ -6,6 +6,7 @@ import type {
   Conversation,
   LiteratureRecord,
   ManuscriptSection,
+  ManuscriptSectionVersion,
   OutlineNode,
   Project,
   ProviderProfile,
@@ -39,6 +40,7 @@ const unsupportedPermissions = (): SystemPermissionSnapshot => ({
   accessibility: 'unsupported',
   fullDiskAccess: 'unsupported',
   screenRecording: 'unsupported',
+  microphone: 'unsupported',
   fullAccessReady: false,
   checkedAt: now(),
 })
@@ -47,6 +49,14 @@ const STORAGE_KEY = 'aiwritepaper-browser-demo-v1'
 
 const now = () => new Date().toISOString()
 const makeId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+function normalizeFallbackLiteratureTitle(value: string): string {
+  const normalized = value
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[\p{P}\p{S}\s]+/gu, '')
+  return normalized || value.normalize('NFKC').toLocaleLowerCase().trim()
+}
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
 function validateSkillInput(input: SkillInput): SkillInput {
@@ -540,6 +550,84 @@ function createSectionsFromOutline(
 
 const demoSections: ManuscriptSection[] = createSectionsFromOutline(demoOutline, 'project-demo', true)
 
+function makeSectionVersion(
+  state: WorkspaceState,
+  section: ManuscriptSection,
+  source: ManuscriptSectionVersion['source'],
+): ManuscriptSectionVersion {
+  const timestamp = now()
+  const latestNumber = state.sectionVersions
+    .filter((item) => item.sectionId === section.id)
+    .reduce((maximum, item) => Math.max(maximum, item.number), 0)
+  const version: ManuscriptSectionVersion = {
+    id: makeId('section-version'),
+    projectId: section.projectId,
+    sectionId: section.id,
+    number: latestNumber + 1,
+    source,
+    content: section.content,
+    wordCount: section.content.replace(/\s+/g, '').length,
+    status: source === 'partial' ? 'error' : section.status === 'verified' ? 'verified' : 'draft',
+    reasoningContent: section.reasoningContent,
+    generationProviderId: section.generationProviderId,
+    generationModel: section.generationModel,
+    thinkingRequested: section.thinkingRequested,
+    origin: section.origin,
+    verificationStatus: section.verificationStatus,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+  state.sectionVersions.push(version)
+  section.activeGenerationVersionId = version.id
+  return version
+}
+
+function normalizeFallbackSectionVersions(state: WorkspaceState): void {
+  state.sectionVersions = Array.isArray(state.sectionVersions) ? state.sectionVersions : []
+  for (const section of state.sections) {
+    if (section.status === 'generating') {
+      section.status = section.content.trim() ? 'draft' : 'pending'
+      section.generationError = '上次演示生成已中断，原稿已经保留。'
+    }
+    const versions = state.sectionVersions.filter((item) => item.sectionId === section.id)
+    if (versions.length === 0 && section.content.trim()) {
+      const migrated = makeSectionVersion(state, section, 'migrated')
+      migrated.createdAt = section.updatedAt
+      migrated.updatedAt = section.updatedAt
+    } else if (!versions.some((item) => item.id === section.activeGenerationVersionId)) {
+      section.activeGenerationVersionId = [...versions].reverse().find((item) => item.content === section.content)?.id
+    }
+  }
+}
+
+function preserveFallbackProjectVersions(state: WorkspaceState, projectId: string): Map<string, string> {
+  const previous = new Map<string, string>()
+  for (const section of state.sections) {
+    if (section.projectId !== projectId) continue
+    previous.set(section.id, section.content)
+    const active = state.sectionVersions.find((item) => item.id === section.activeGenerationVersionId)
+    if (section.content.trim() && active?.content !== section.content) makeSectionVersion(state, section, 'saved')
+  }
+  return previous
+}
+
+function recordFallbackDerivedVersions(
+  state: WorkspaceState,
+  projectId: string,
+  targetSectionId: string,
+  previous: Map<string, string>,
+): void {
+  for (const section of state.sections) {
+    if (
+      section.projectId !== projectId
+      || section.id === targetSectionId
+      || previous.get(section.id) === section.content
+    ) continue
+    if (section.content.trim()) makeSectionVersion(state, section, 'derived')
+    else section.activeGenerationVersionId = undefined
+  }
+}
+
 const initialWorkspace = (): WorkspaceState => {
   const project: Project = {
     id: 'project-demo',
@@ -651,6 +739,7 @@ const initialWorkspace = (): WorkspaceState => {
     literature: demoLiterature,
     outlines: { [project.id]: demoOutline },
     sections: demoSections,
+    sectionVersions: [],
     citations: [],
     runs: [run],
     mcpServers: [
@@ -723,8 +812,10 @@ function migrateDefaultDemoOutline(state: WorkspaceState): WorkspaceState {
     ...migrated.sections.filter((section) => section.projectId !== 'project-demo'),
     ...clone(demoSections),
   ]
+  migrated.sectionVersions = migrated.sectionVersions.filter((item) => item.projectId !== 'project-demo')
   const migratedProject = migrated.projects.find((project) => project.id === 'project-demo')
   if (migratedProject) migratedProject.activeSectionId = demoSections[0]?.id
+  normalizeFallbackSectionVersions(migrated)
   return migrated
 }
 
@@ -751,6 +842,7 @@ function readState(): WorkspaceState {
         accessMode: conversation.accessMode === 'full' ? 'full' : 'ask',
       })),
       attachments: Array.isArray(parsed.attachments) ? parsed.attachments : [],
+      sectionVersions: Array.isArray(parsed.sectionVersions) ? parsed.sectionVersions : [],
       mcpServers: ensureDefaultArxivMcpServer(parsed.mcpServers ?? [], now()),
       skills: Array.isArray(parsed.skills) ? parsed.skills : [],
       settings: {
@@ -778,10 +870,12 @@ function readState(): WorkspaceState {
             : [],
       },
     }
+    normalizeFallbackSectionVersions(normalized)
     memoryState = migrateDefaultDemoOutline(normalized)
     synchronizeDerivedSections(memoryState)
   } catch {
     memoryState = initialWorkspace()
+    normalizeFallbackSectionVersions(memoryState)
   }
   return memoryState
 }
@@ -1018,6 +1112,7 @@ const fallbackApi: PaperAgentApi = {
         )
         draft.literature = draft.literature.filter((item) => item.projectId !== projectId)
         draft.sections = draft.sections.filter((item) => item.projectId !== projectId)
+        draft.sectionVersions = draft.sectionVersions.filter((item) => item.projectId !== projectId)
         draft.citations = draft.citations.filter(
           (item) => item.projectId !== projectId && !sectionIds.has(item.sectionId),
         )
@@ -1218,6 +1313,9 @@ const fallbackApi: PaperAgentApi = {
     async requestFullAccess() {
       return unsupportedPermissions()
     },
+    async requestMicrophone() {
+      return unsupportedPermissions()
+    },
     async openSettings() {
       throw new Error('浏览器演示无法申请 macOS 系统权限，请使用桌面应用。')
     },
@@ -1309,6 +1407,92 @@ const fallbackApi: PaperAgentApi = {
       if (!updated) throw new Error('未找到文献记录')
       return clone(updated)
     },
+    async setProject(input) {
+      let updated: LiteratureRecord | undefined
+      mutate((draft) => {
+        const target = draft.literature.find((item) => (
+          item.id === input.literatureId
+          && (
+            input.sourceProjectId === undefined
+            || (input.sourceProjectId === null ? item.projectId === undefined : item.projectId === input.sourceProjectId)
+          )
+        ))
+        if (!target) return
+        if (input.targetProjectId && !draft.projects.some((project) => project.id === input.targetProjectId)) {
+          throw new Error('目标项目不存在')
+        }
+        target.projectId = input.targetProjectId
+        target.included = false
+        target.updatedAt = now()
+        updated = target
+      })
+      if (!updated) throw new Error('未找到文献记录')
+      return clone(updated)
+    },
+    async delete(input) {
+      let removed = false
+      mutate((draft) => {
+        const index = draft.literature.findIndex((item) => (
+          item.id === input.literatureId
+          && (
+            input.sourceProjectId === undefined
+            || (input.sourceProjectId === null ? item.projectId === undefined : item.projectId === input.sourceProjectId)
+          )
+        ))
+        if (index < 0) return
+        const record = draft.literature[index]
+        const referenced = Boolean(record.projectId) && (
+          draft.citations.some((citation) => citation.projectId === record.projectId && citation.literatureId === record.id)
+          || flattenOutline(draft.outlines[record.projectId!] ?? []).some((node) => node.citationIds.includes(record.id))
+          || draft.sections.some((section) => (
+            section.projectId === record.projectId
+            && (
+              section.content.includes(`【文献:${record.id}】`)
+              || section.content.includes(`【文献：${record.id}】`)
+              || section.content.includes(`[cite:${record.id}]`)
+              || section.content.includes(`[@${record.id}]`)
+            )
+          ))
+        )
+        if (referenced) throw new Error('该文献仍被大纲或正文引用，请先移除对应引用后再删除。')
+        draft.literature.splice(index, 1)
+        removed = true
+      })
+      if (!removed) throw new Error('未找到文献记录')
+    },
+    async addFromMessage(input) {
+      const added: LiteratureRecord[] = []
+      mutate((draft) => {
+        const message = draft.messages.find((item) => item.id === input.messageId && item.role === 'assistant')
+        if (!message) throw new Error('未找到助手消息')
+        for (const candidateId of [...new Set(input.candidateIds)]) {
+          const candidate = message.literatureCandidates?.find((item) => item.id === candidateId)
+          if (!candidate) throw new Error('所选文献不属于这条消息')
+          const existing = draft.literature.find((item) => (
+            item.projectId === message.projectId
+            && normalizeFallbackLiteratureTitle(item.title) === normalizeFallbackLiteratureTitle(candidate.title)
+          ))
+          if (existing) {
+            added.push(existing)
+            continue
+          }
+          const timestamp = now()
+          const record: LiteratureRecord = {
+            ...candidate,
+            id: makeId('literature'),
+            projectId: message.projectId,
+            included: false,
+            origin: 'demo',
+            verificationStatus: 'demo',
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          }
+          draft.literature.push(record)
+          added.push(record)
+        }
+      })
+      return clone(added)
+    },
   },
   outline: {
     async generate(input) {
@@ -1316,6 +1500,7 @@ const fallbackApi: PaperAgentApi = {
       mutate((draft) => {
         draft.outlines[input.projectId] = generated
         draft.sections = draft.sections.filter((item) => item.projectId !== input.projectId)
+        draft.sectionVersions = draft.sectionVersions.filter((item) => item.projectId !== input.projectId)
         draft.sections.push(...createSectionsFromOutline(generated, input.projectId))
         const project = draft.projects.find((item) => item.id === input.projectId)
         if (project) {
@@ -1354,10 +1539,8 @@ const fallbackApi: PaperAgentApi = {
           (item) => item.id === input.sectionId || item.outlineNodeId === input.sectionId,
         )
         if (existing) {
+          preserveFallbackProjectVersions(draft, existing.projectId)
           existing.status = 'generating'
-          existing.content = ''
-          existing.wordCount = 0
-          existing.reasoningContent = undefined
           existing.generationError = undefined
           existing.generationProviderId = input.providerId
           existing.generationModel = input.model
@@ -1396,27 +1579,34 @@ const fallbackApi: PaperAgentApi = {
       const deltas = fullContent.match(/.{1,5}/gs) ?? [fullContent]
       for (const delta of deltas) {
         await new Promise((resolve) => window.setTimeout(resolve, 24))
-        mutate((draft) => {
-          const existing = draft.sections.find((item) => item.id === (sourceSection?.id ?? input.sectionId))
-          if (existing) {
-            existing.content += delta
-            existing.wordCount = existing.content.replace(/\s+/g, '').length
-            existing.updatedAt = now()
-          }
-        })
         emitSection({ runId, sectionId: sourceSection?.id ?? input.sectionId, type: 'text-delta', delta })
       }
       const completedState = mutate((draft) => {
         const existing = draft.sections.find((item) => item.id === (sourceSection?.id ?? input.sectionId))
-        if (existing) saveSectionContentInState(draft, existing.id, fullContent, now())
-        synchronizeDerivedSections(draft, input.projectId, now())
+        if (existing) {
+          const previous = preserveFallbackProjectVersions(draft, existing.projectId)
+          saveSectionContentInState(draft, existing.id, fullContent, now())
+          existing.reasoningContent = undefined
+          existing.generationProviderId = input.providerId
+          existing.generationModel = input.model
+          existing.thinkingRequested = false
+          existing.generationError = undefined
+          recordFallbackDerivedVersions(draft, existing.projectId, existing.id, previous)
+          makeSectionVersion(draft, existing, 'generated')
+        }
       })
       const completed = completedState.sections.find((item) => item.id === (sourceSection?.id ?? input.sectionId))
       if (completed) emitSection({ runId, sectionId: completed.id, type: 'completed', section: clone(completed) })
     },
     async save(sectionId, content) {
       mutate((draft) => {
-        saveSectionContentInState(draft, sectionId, content, now())
+        const section = draft.sections.find((item) => item.id === sectionId)
+        if (!section) throw new Error('未找到对应章节')
+        const previous = preserveFallbackProjectVersions(draft, section.projectId)
+        const saved = saveSectionContentInState(draft, sectionId, content, now())
+        recordFallbackDerivedVersions(draft, section.projectId, sectionId, previous)
+        const active = draft.sectionVersions.find((item) => item.id === saved.activeGenerationVersionId)
+        if (active?.content !== saved.content) makeSectionVersion(draft, saved, 'saved')
       })
     },
     async setActive(sectionId) {
@@ -1434,6 +1624,27 @@ const fallbackApi: PaperAgentApi = {
         restoreActiveModelIfNeeded(draft)
       })
       return clone(next)
+    },
+    async selectVersion(sectionId, versionId) {
+      let selected: ManuscriptSection | undefined
+      mutate((draft) => {
+        const section = draft.sections.find((item) => item.id === sectionId)
+        const version = draft.sectionVersions.find((item) => item.id === versionId && item.sectionId === sectionId)
+        if (!section || !version) throw new Error('未找到章节历史版本')
+        if (section.status === 'generating') throw new Error('章节正在生成，暂时不能切换历史版本')
+        const previous = preserveFallbackProjectVersions(draft, section.projectId)
+        selected = saveSectionContentInState(draft, sectionId, version.content, now())
+        selected.reasoningContent = version.reasoningContent
+        selected.generationProviderId = version.generationProviderId
+        selected.generationModel = version.generationModel
+        selected.thinkingRequested = version.thinkingRequested
+        selected.status = version.status
+        selected.generationError = version.source === 'partial' ? '这是一次未完整生成的历史版本。' : undefined
+        recordFallbackDerivedVersions(draft, section.projectId, sectionId, previous)
+        selected.activeGenerationVersionId = version.id
+      })
+      if (!selected) throw new Error('未找到章节历史版本')
+      return clone(selected)
     },
     onEvent(listener) {
       sectionListeners.add(listener)

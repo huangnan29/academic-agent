@@ -90,6 +90,7 @@ const state: WorkspaceState = {
       updatedAt: timestamp,
     },
   ],
+  sectionVersions: [],
   citations: [],
   runs: [],
   mcpServers: [{
@@ -156,6 +157,50 @@ const askSystem = buildChatMessages(askState, {
 if (!askSystem.includes('必须先说明具体动作并询问用户')) {
   throw new Error('默认权限没有写入询问策略。')
 }
+
+const currentMessageState = structuredClone(state)
+currentMessageState.messages.push({
+  id: 'message-current',
+  projectId: 'project-smoke',
+  conversationId: 'conversation-smoke',
+  role: 'user',
+  content: '/paper_search 帮我搜索5篇与此标题强相关的内容',
+  status: 'completed',
+  contextScope: 'project',
+  origin: 'live',
+  verificationStatus: 'unverified',
+  createdAt: timestamp,
+  updatedAt: timestamp,
+})
+currentMessageState.conversations[0].messageIds.push('message-current')
+const resolvedMessages = buildChatMessages(currentMessageState, {
+  projectId: 'project-smoke',
+  conversationId: 'conversation-smoke',
+  content: '/search_papers 帮我搜索5篇与此标题强相关的内容',
+  providerId: 'provider-smoke',
+  model: 'model-smoke',
+  contextScope: 'project',
+  contextReferences: [{ kind: 'mcp-tool', serverId: 'mcp-smoke', toolName: 'search_papers' }],
+  currentUserMessageId: 'message-current',
+  resolvedMcpTools: [{
+    serverId: 'mcp-smoke',
+    serverName: '本机文献 MCP',
+    toolName: 'search_papers',
+    arguments: { query: '"generative AI" AND education', max_results: 5 },
+    result: {
+      content: [{ type: 'text', text: JSON.stringify({ total_results: 1, papers: [{ id: '2501.00001v1', title: 'Generative AI in Education' }] }) }],
+      isError: false,
+    },
+  }],
+})
+const resolvedContext = resolvedMessages.map((message) => message.content).join('\n')
+const resolvedUsers = resolvedMessages.filter((message) => message.role === 'user')
+if (!resolvedContext.includes('本轮工具执行判定') || !resolvedContext.includes('Generative AI in Education')) {
+  throw new Error('真实 MCP 返回或执行判定没有进入模型上下文。')
+}
+if (resolvedUsers.length !== 1 || resolvedUsers[0].content.startsWith('/paper_search')) {
+  throw new Error('当前 Slash 消息同时进入历史和最终用户消息。')
+}
 if (system.includes('这是从绪论主稿同步得到的小节')) {
   throw new Error('项目对话重复注入了从主稿拆分的同步小节。')
 }
@@ -196,4 +241,5 @@ process.stdout.write(`${JSON.stringify({
   slashSkillIncluded: true,
   slashMcpCapabilityIncluded: true,
   mcpExecutionBoundaryIncluded: true,
+  currentMessageDeduplicated: true,
 }, null, 2)}\n`)

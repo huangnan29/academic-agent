@@ -178,6 +178,22 @@ export const chatStartSchema = z.object({
   ])).max(12).optional(),
 }).strict()
 
+export const literatureAddFromMessageSchema = z.object({
+  messageId: z.string().min(1).max(200),
+  candidateIds: z.array(z.string().min(1).max(200)).min(1).max(50),
+}).strict()
+
+export const literatureSetProjectSchema = z.object({
+  literatureId: z.string().min(1).max(200),
+  sourceProjectId: z.string().min(1).max(200).nullable().optional(),
+  targetProjectId: z.string().min(1).max(200).optional(),
+}).strict()
+
+export const literatureDeleteSchema = z.object({
+  literatureId: z.string().min(1).max(200),
+  sourceProjectId: z.string().min(1).max(200).nullable().optional(),
+}).strict()
+
 export const outlineGenerateSchema = z.object({
   projectId: z.string().min(1),
   providerId: z.string().min(1),

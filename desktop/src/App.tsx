@@ -26,6 +26,7 @@ import {
   Folder,
   FolderInput,
   FolderOpen,
+  FolderX,
   GripVertical,
   GitBranch,
   KeyRound,
@@ -90,6 +91,7 @@ import type {
   LiteratureRecord,
   McpServerConfig,
   ManuscriptSection,
+  ManuscriptSectionVersion,
   OutlineNode,
   ProviderProtocol,
   ProviderProfile,
@@ -108,12 +110,21 @@ import {
 } from '../shared/defaultMcp'
 import { isNativeBridge, paperAgent } from './fallback'
 import { AppearanceSettingsPage } from './AppearanceSettingsPage'
+import { MessageLiteratureActions } from './MessageLiteratureActions'
 import { OutlineTree } from './OutlineTree'
 
 type Route = 'workspace' | 'library' | 'skills' | 'settings'
 type CenterMode = 'chat' | 'manuscript'
 type RightTab = 'literature' | 'drafts' | 'process'
 type SettingsTab = 'providers' | 'mcp' | 'local'
+type SectionGenerationCandidate = {
+  sectionId: string
+  content: string
+  reasoningContent: string
+  providerId: string
+  model: string
+  thinkingRequested: boolean
+}
 type SettingsSection =
   | 'general'
   | 'appearance'
@@ -135,7 +146,7 @@ const appIconUrl = new URL('../build/icon.png', import.meta.url).href
 const darkDockIconUrl = new URL('../build/dock-icon-dark.png', import.meta.url).href
 
 const verificationLabels: Record<LiteratureRecord['verificationStatus'], string> = {
-  'verified-metadata': '元数据已核验',
+  'verified-metadata': '来源元数据已记录',
   'abstract-only': '仅检索到摘要',
   unverified: '尚未核验',
   unavailable: '来源不可访问',
@@ -162,6 +173,7 @@ const emptyWorkspace: WorkspaceState = {
   literature: [],
   outlines: {},
   sections: [],
+  sectionVersions: [],
   citations: [],
   runs: [],
   mcpServers: [],
@@ -206,6 +218,14 @@ function formatTime(value: string) {
   return new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(
     date,
   )
+}
+
+function formatSectionVersionMoment(version: ManuscriptSectionVersion): string {
+  const time = formatTime(version.createdAt)
+  if (version.source === 'partial' || version.status === 'error') return `未完成 · ${time}`
+  if (version.source === 'derived') return `同步于 ${time}`
+  if (version.source === 'saved' || version.source === 'migrated') return `保存于 ${time}`
+  return `生成于 ${time}`
 }
 
 function formatBytes(bytes: number) {
@@ -1316,10 +1336,14 @@ function ThinkingBlock({ content, streaming }: { content: string; streaming: boo
 function ChatView({
   messages,
   projectTitle,
+  literature,
+  onAddLiterature,
   onShowLiterature,
 }: {
   messages: ChatMessage[]
   projectTitle: string
+  literature: LiteratureRecord[]
+  onAddLiterature: (messageId: string, candidateId: string) => Promise<void>
   onShowLiterature: () => void
 }) {
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -1342,7 +1366,15 @@ function ChatView({
 
   return (
     <div className="conversation-stream">
-      {messages.map((message) => (
+      {messages.map((message) => {
+        const candidates = message.literatureCandidates ?? []
+        const addedCandidateIds = candidates
+          .filter((candidate) => literature.some((record) => (
+            (candidate.doi && record.doi && candidate.doi.toLocaleLowerCase() === record.doi.toLocaleLowerCase())
+            || normalizeMessageLiteratureTitle(candidate.title) === normalizeMessageLiteratureTitle(record.title)
+          )))
+          .map((candidate) => candidate.id)
+        return (
         <article key={message.id} className={`message message-${message.role}`}>
           <div className="message-avatar" aria-hidden="true">
             {message.role === 'user' ? '你' : <Bot size={17} />}
@@ -1357,6 +1389,14 @@ function ChatView({
               <ThinkingBlock content={message.reasoningContent} streaming={message.status === 'streaming'} />
             )}
             <MarkdownMessage content={message.content || '正在生成…'} />
+            {message.role === 'assistant' && candidates.length > 0 && (
+              <MessageLiteratureActions
+                papers={candidates}
+                addedPaperIds={addedCandidateIds}
+                disabled={message.status === 'streaming'}
+                onAddPaper={(paper) => onAddLiterature(message.id, paper.id)}
+              />
+            )}
             {message.status === 'streaming' && (
               <span className="streaming-line">
                 <LoaderCircle size={13} className="spin" /> 正在生成
@@ -1381,47 +1421,99 @@ function ChatView({
             )}
           </div>
         </article>
-      ))}
+        )
+      })}
       <div ref={bottomRef} />
     </div>
   )
 }
 
+function normalizeMessageLiteratureTitle(value: string): string {
+  const normalized = value
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[\p{P}\p{S}\s]+/gu, '')
+  return normalized || value.normalize('NFKC').toLocaleLowerCase().trim()
+}
+
 function ManuscriptView({
   section,
+  sectionVersions,
   generationProviderName,
   canGenerateOutline,
   generatingOutline,
   isEditing,
   draft,
   saving,
+  selectingVersionId,
   onDraft,
   onEdit,
   onSave,
   onGenerate,
+  onSelectVersion,
   onGenerateOutline,
   onConfigureModel,
 }: {
   section?: ManuscriptSection
+  sectionVersions: ManuscriptSectionVersion[]
   generationProviderName?: string
   canGenerateOutline: boolean
   generatingOutline: boolean
   isEditing: boolean
   draft: string
   saving: boolean
+  selectingVersionId?: string
   onDraft: (value: string) => void
   onEdit: () => void
   onSave: () => void
   onGenerate: () => void
+  onSelectVersion: (versionId: string) => Promise<void>
   onGenerateOutline: () => void
   onConfigureModel: () => void
 }) {
   const streamTailRef = useRef<HTMLSpanElement>(null)
+  const versionPickerRef = useRef<HTMLDivElement>(null)
+  const versionTriggerRef = useRef<HTMLButtonElement>(null)
+  const versionListRef = useRef<HTMLDivElement>(null)
+  const [versionMenuOpen, setVersionMenuOpen] = useState(false)
+  const [versionFocusIndex, setVersionFocusIndex] = useState(0)
   const manuscriptDiff = useMemo(
     () => isEditing && section ? buildManuscriptDiff(section.content, draft) : [],
     [draft, isEditing, section?.content],
   )
   const changedLines = manuscriptDiff.filter((line) => line.kind !== 'same')
+  const orderedVersions = useMemo(
+    () => [...sectionVersions].sort((left, right) => right.number - left.number || right.createdAt.localeCompare(left.createdAt)),
+    [sectionVersions],
+  )
+  const activeVersion = orderedVersions.find((version) => version.id === section?.activeGenerationVersionId)
+
+  useEffect(() => {
+    setVersionMenuOpen(false)
+    setVersionFocusIndex(0)
+  }, [section?.id])
+
+  useEffect(() => {
+    if (!versionMenuOpen) return
+    const activeIndex = Math.max(0, orderedVersions.findIndex((version) => version.id === activeVersion?.id))
+    setVersionFocusIndex(activeIndex)
+    requestAnimationFrame(() => versionListRef.current?.focus())
+
+    const closeOnOutside = (event: PointerEvent) => {
+      if (!versionPickerRef.current?.contains(event.target as Node)) setVersionMenuOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setVersionMenuOpen(false)
+      versionTriggerRef.current?.focus()
+    }
+    window.addEventListener('pointerdown', closeOnOutside)
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      window.removeEventListener('pointerdown', closeOnOutside)
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [activeVersion?.id, orderedVersions, versionMenuOpen])
 
   useEffect(() => {
     if (section?.status !== 'generating') return
@@ -1449,6 +1541,8 @@ function ManuscriptView({
   }
 
   const generating = section.status === 'generating'
+  const hasVersionHistory = orderedVersions.length > 0
+  const showVersionPicker = hasVersionHistory || ['draft', 'verified', 'error'].includes(section.status)
   const thinkingState = section.reasoningContent
     ? (generating ? 'Thinking 正在输出' : 'Thinking 已返回')
     : section.thinkingRequested
@@ -1459,7 +1553,107 @@ function ManuscriptView({
     <div className="manuscript-view">
       <div className="manuscript-toolbar">
         <div>
-          <span>第 {section.version} 版</span>
+          {showVersionPicker && (
+            <div className="manuscript-version-cluster">
+              <div className="manuscript-version-picker" ref={versionPickerRef}>
+                <button
+                  type="button"
+                  className="manuscript-version-trigger"
+                  ref={versionTriggerRef}
+                  disabled={generating || isEditing || saving || Boolean(selectingVersionId) || orderedVersions.length === 0}
+                  aria-label={generating
+                    ? '正在生成章节新版本，旧版本已经保留'
+                    : activeVersion
+                      ? `版本，第 ${activeVersion.number} 版，${formatSectionVersionMoment(activeVersion)}`
+                      : orderedVersions.length > 0
+                      ? '当前稿尚未对应历史版本，可打开版本列表切换'
+                      : '暂无可选择的历史版本'}
+                  aria-haspopup="listbox"
+                  aria-expanded={versionMenuOpen}
+                  aria-controls={versionMenuOpen ? 'manuscript-version-list' : undefined}
+                  onClick={() => setVersionMenuOpen((current) => !current)}
+                  onKeyDown={(event) => {
+                    if (!['ArrowDown', 'ArrowUp'].includes(event.key) || orderedVersions.length === 0) return
+                    event.preventDefault()
+                    const selectedIndex = Math.max(0, orderedVersions.findIndex((version) => version.id === activeVersion?.id))
+                    setVersionFocusIndex(event.key === 'ArrowDown'
+                      ? selectedIndex
+                      : (selectedIndex - 1 + orderedVersions.length) % orderedVersions.length)
+                    setVersionMenuOpen(true)
+                  }}
+                >
+                  <span>{generating ? '正在生成新版' : activeVersion ? `第 ${activeVersion.number} 版` : '当前稿'}</span>
+                  <small>{generating ? '旧版本已保留' : activeVersion ? formatSectionVersionMoment(activeVersion) : orderedVersions.length > 0 ? '选择历史版本' : '暂无历史'}</small>
+                  <ChevronDown size={13} aria-hidden="true" />
+                </button>
+                {versionMenuOpen && orderedVersions.length > 0 && (
+                  <div
+                    className="manuscript-version-menu"
+                    id="manuscript-version-list"
+                    role="listbox"
+                    aria-label={`${section.title}的历史版本`}
+                    aria-activedescendant={`manuscript-version-option-${versionFocusIndex}`}
+                    tabIndex={-1}
+                    ref={versionListRef}
+                    onKeyDown={(event) => {
+                      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                        event.preventDefault()
+                        const direction = event.key === 'ArrowDown' ? 1 : -1
+                        setVersionFocusIndex((current) => (current + direction + orderedVersions.length) % orderedVersions.length)
+                        return
+                      }
+                      if (event.key === 'Home' || event.key === 'End') {
+                        event.preventDefault()
+                        setVersionFocusIndex(event.key === 'Home' ? 0 : orderedVersions.length - 1)
+                        return
+                      }
+                      if ((event.key === 'Enter' || event.key === ' ') && orderedVersions[versionFocusIndex]) {
+                        event.preventDefault()
+                        const version = orderedVersions[versionFocusIndex]
+                        setVersionMenuOpen(false)
+                        versionTriggerRef.current?.focus()
+                        void onSelectVersion(version.id)
+                      }
+                    }}
+                  >
+                    {orderedVersions.map((version, index) => (
+                      <button
+                        type="button"
+                        id={`manuscript-version-option-${index}`}
+                        role="option"
+                        aria-selected={version.id === activeVersion?.id}
+                        className={`${index === versionFocusIndex ? 'is-focused' : ''}${version.id === activeVersion?.id ? ' is-active' : ''}`}
+                        key={version.id}
+                        disabled={Boolean(selectingVersionId)}
+                        onMouseEnter={() => setVersionFocusIndex(index)}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => {
+                          setVersionMenuOpen(false)
+                          versionTriggerRef.current?.focus()
+                          void onSelectVersion(version.id)
+                        }}
+                      >
+                        <span>
+                          <strong>第 {version.number} 版</strong>
+                          <small><time dateTime={version.createdAt}>{formatSectionVersionMoment(version)}</time></small>
+                        </span>
+                        {version.id === activeVersion?.id && <Check size={14} aria-hidden="true" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                className="manuscript-regenerate-button"
+                onClick={onGenerate}
+                disabled={generating || isEditing || saving || Boolean(selectingVersionId)}
+                aria-label={`重新生成章节：${section.title}`}
+              >
+                <RefreshCw size={13} aria-hidden="true" /> 重新生成
+              </button>
+            </div>
+          )}
           <span>{section.wordCount.toLocaleString('zh-CN')} 字</span>
           <StatusBadge status={section.status}>{sectionStatusLabel(section)}</StatusBadge>
           {section.generationModel && (
@@ -1470,20 +1664,20 @@ function ManuscriptView({
           )}
         </div>
         <div className="toolbar-actions">
-          {['pending', 'error'].includes(section.status) && (
+          {section.status === 'pending' && !hasVersionHistory && (
             <button type="button" className="secondary-button" onClick={onGenerate}>
-              <FilePenLine size={15} /> {section.status === 'error' ? '重新生成' : '生成本章'}
+              <FilePenLine size={15} /> 生成本章
             </button>
           )}
           {generating ? (
-            <span className="section-streaming-label"><LoaderCircle size={14} className="spin" /> 正在流式生成</span>
+            <span className="section-streaming-label" aria-live="polite"><LoaderCircle size={14} className="spin" /> 正在流式生成</span>
           ) : isEditing ? (
             <button type="button" className="primary-button compact" onClick={onSave} disabled={saving}>
               {saving ? <LoaderCircle size={15} className="spin" /> : <Save size={15} />}
               {saving ? '保存中' : '保存修改'}
             </button>
           ) : (
-            <button type="button" className="secondary-button" onClick={onEdit}>
+            <button type="button" className="secondary-button" onClick={onEdit} disabled={Boolean(selectingVersionId)}>
               <PencilLine size={15} /> 编辑
             </button>
           )}
@@ -1491,7 +1685,7 @@ function ManuscriptView({
       </div>
       <article className="manuscript-paper">
         {section.generationError && (
-          <div className="section-generation-error" role="alert"><CircleAlert size={16} /><span><strong>章节生成中断</strong><small>{section.generationError} 已收到的正文片段已经保留，可重新生成或手工编辑。</small></span></div>
+          <div className="section-generation-error" role="alert"><CircleAlert size={16} /><span><strong>章节生成中断</strong><small>{section.generationError} 当前正文已经保留，可重新生成或手工编辑。</small></span></div>
         )}
         {section.reasoningContent && (
           <div className="section-thinking-wrap"><ThinkingBlock content={section.reasoningContent} streaming={generating} /></div>
@@ -1830,6 +2024,65 @@ function SystemPermissionDialog({
   )
 }
 
+type SpeechRecognitionResultLike = {
+  isFinal: boolean
+  [index: number]: { transcript: string }
+}
+
+type SpeechRecognitionEventLike = Event & {
+  resultIndex: number
+  results: {
+    length: number
+    [index: number]: SpeechRecognitionResultLike
+  }
+}
+
+type SpeechRecognitionErrorEventLike = Event & {
+  error: string
+}
+
+type SpeechRecognitionLike = {
+  lang: string
+  continuous: boolean
+  interimResults: boolean
+  maxAlternatives: number
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null
+  onend: (() => void) | null
+  start: () => void
+  stop: () => void
+  abort: () => void
+}
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike
+
+function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | undefined {
+  if (typeof window === 'undefined') return undefined
+  const speechWindow = window as Window & {
+    SpeechRecognition?: SpeechRecognitionConstructor
+    webkitSpeechRecognition?: SpeechRecognitionConstructor
+  }
+  return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition
+}
+
+function speechErrorMessage(error: string): string {
+  switch (error) {
+    case 'not-allowed':
+    case 'service-not-allowed':
+      return '麦克风或语音识别权限未允许，请在系统设置中授权后重试。'
+    case 'audio-capture':
+      return '未检测到可用麦克风，请检查麦克风连接和系统输入设备。'
+    case 'no-speech':
+      return '没有听到清晰语音，请靠近麦克风后重试。'
+    case 'network':
+      return '语音识别网络服务不可用，请检查网络后重试。'
+    case 'aborted':
+      return '语音识别已停止。'
+    default:
+      return `语音识别失败（${error || '未知错误'}），请重试。`
+  }
+}
+
 function Composer({
   providers,
   activeProviderId,
@@ -1849,6 +2102,7 @@ function Composer({
   onRemoveAttachment,
   onRequestAccessMode,
   onManagePermissions,
+  onToast,
 }: {
   providers: ProviderProfile[]
   activeProviderId?: string
@@ -1868,6 +2122,7 @@ function Composer({
   onRemoveAttachment: (attachmentId: string) => Promise<void>
   onRequestAccessMode: (mode: ConversationAccessMode) => Promise<void>
   onManagePermissions: () => void
+  onToast: (message: string, tone?: 'success' | 'error') => void
 }) {
   const [value, setValue] = useState('')
   const [cursorPosition, setCursorPosition] = useState(0)
@@ -1883,8 +2138,16 @@ function Composer({
   const composingRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const addMenuRef = useRef<HTMLDivElement>(null)
+  const speechRecognitionRef = useRef<SpeechRecognitionLike | undefined>(undefined)
+  const speechSessionRef = useRef<{
+    baseValue: string
+    insertionPoint: number
+    segments: Array<{ text: string; isFinal: boolean }>
+  } | undefined>(undefined)
   const interactionLocked = running || submitting
   const accessMode: ConversationAccessMode = conversation?.accessMode === 'full' ? 'full' : 'ask'
+  const [speechActive, setSpeechActive] = useState(false)
+  const [speechRequesting, setSpeechRequesting] = useState(false)
 
   type SlashItem = {
     key: string
@@ -1991,6 +2254,112 @@ function Composer({
   }), [mcpServers, selectedReferences])
   const canSend = Boolean((value.trim() || zeroArgumentToolReference) && activeProviderId && activeModel && !interactionLocked)
 
+  const stopSpeech = () => {
+    const recognition = speechRecognitionRef.current
+    speechRecognitionRef.current = undefined
+    speechSessionRef.current = undefined
+    setSpeechActive(false)
+    if (!recognition) return
+    try {
+      recognition.stop()
+    } catch {
+      try {
+        recognition.abort()
+      } catch {
+        // 识别器已经结束时，浏览器可能拒绝重复停止；保留已有文字即可。
+      }
+    }
+  }
+
+  const startSpeech = async () => {
+    if (interactionLocked || speechRequesting || speechActive) {
+      if (speechActive) stopSpeech()
+      return
+    }
+    setSpeechRequesting(true)
+    try {
+      const permission = await paperAgent.systemPermissions.requestMicrophone()
+      if (permission.microphone !== 'granted') {
+        onToast(
+          permission.platform === 'unsupported'
+            ? '浏览器演示无法申请麦克风权限，请在桌面应用中使用。'
+            : '麦克风权限未授予，语音输入没有启动。请在系统设置中允许学术 Agent 使用麦克风。',
+          'error',
+        )
+        return
+      }
+
+      const constructor = getSpeechRecognitionConstructor()
+      if (!constructor) {
+        onToast('当前应用环境不支持语音识别，请使用支持 Web Speech Recognition 的桌面版本。', 'error')
+        return
+      }
+
+      const textarea = textareaRef.current
+      const insertionPoint = textarea?.selectionStart ?? cursorPosition
+      const recognition = new constructor()
+      const session = {
+        baseValue: value,
+        insertionPoint: Math.max(0, Math.min(insertionPoint, value.length)),
+        segments: [] as Array<{ text: string; isFinal: boolean }>,
+      }
+      speechSessionRef.current = session
+      speechRecognitionRef.current = recognition
+      recognition.lang = 'zh-CN'
+      recognition.continuous = true
+      recognition.interimResults = true
+      recognition.maxAlternatives = 1
+      recognition.onresult = (event) => {
+        const currentSession = speechSessionRef.current
+        if (!currentSession || speechRecognitionRef.current !== recognition) return
+        for (let index = event.resultIndex; index < event.results.length; index += 1) {
+          const result = event.results[index]
+          currentSession.segments[index] = {
+            text: result[0]?.transcript ?? '',
+            isFinal: result.isFinal,
+          }
+        }
+        currentSession.segments.length = event.results.length
+        const transcript = currentSession.segments.map((segment) => segment.text).join('')
+        const nextValue = `${currentSession.baseValue.slice(0, currentSession.insertionPoint)}${transcript}${currentSession.baseValue.slice(currentSession.insertionPoint)}`
+        const nextCursor = currentSession.insertionPoint + transcript.length
+        setValue(nextValue)
+        setCursorPosition(nextCursor)
+        requestAnimationFrame(() => {
+          if (document.activeElement !== textareaRef.current) return
+          textareaRef.current?.setSelectionRange(nextCursor, nextCursor)
+        })
+      }
+      recognition.onerror = (event) => {
+        if (speechRecognitionRef.current !== recognition) return
+        speechRecognitionRef.current = undefined
+        speechSessionRef.current = undefined
+        setSpeechActive(false)
+        if (event.error !== 'aborted') onToast(speechErrorMessage(event.error), 'error')
+      }
+      recognition.onend = () => {
+        if (speechRecognitionRef.current !== recognition) return
+        speechRecognitionRef.current = undefined
+        speechSessionRef.current = undefined
+        setSpeechActive(false)
+      }
+      recognition.start()
+      setSpeechActive(true)
+      requestAnimationFrame(() => textareaRef.current?.focus())
+    } catch (error) {
+      speechRecognitionRef.current = undefined
+      speechSessionRef.current = undefined
+      setSpeechActive(false)
+      onToast(error instanceof Error ? error.message : '无法启动语音识别，请重试。', 'error')
+    } finally {
+      setSpeechRequesting(false)
+    }
+  }
+
+  useEffect(() => {
+    if (interactionLocked && speechActive) stopSpeech()
+  }, [interactionLocked, speechActive])
+
   useEffect(() => {
     setGoalDraft(conversation?.goal ?? '')
     setGoalOpen(false)
@@ -1998,11 +2367,14 @@ function Composer({
   }, [conversation?.id, conversation?.goal])
 
   useEffect(() => {
+    stopSpeech()
     setValue('')
     setCursorPosition(0)
     setSelectedReferences([])
     setSlashDismissedValue(undefined)
   }, [conversation?.id])
+
+  useEffect(() => () => stopSpeech(), [])
 
   useEffect(() => {
     setSlashSelection(0)
@@ -2057,6 +2429,7 @@ function Composer({
       ? `/${zeroArgumentToolReference.toolName}`
       : '')
     const contextReferences = [...selectedReferences]
+    stopSpeech()
     setValue('')
     setCursorPosition(0)
     setSlashDismissedValue(undefined)
@@ -2209,6 +2582,8 @@ function Composer({
           ref={textareaRef}
           value={value}
           onChange={(event) => {
+            // 用户开始手动编辑时结束本轮识别，避免后续中间结果覆盖刚输入的内容。
+            if (speechActive) stopSpeech()
             setValue(event.target.value)
             setCursorPosition(event.target.selectionStart)
             setSlashDismissedValue(undefined)
@@ -2314,14 +2689,25 @@ function Composer({
                 onSettings()
               }}
             />
+            <button
+              type="button"
+              className={`microphone-button${speechActive ? ' is-active' : ''}`}
+              onClick={() => { void (speechActive ? stopSpeech() : startSpeech()) }}
+              disabled={interactionLocked || speechRequesting}
+              aria-pressed={speechActive}
+              aria-label={speechActive ? '停止语音输入' : '开始语音输入'}
+              title={speechActive ? '停止语音输入' : '语音输入'}
+            >
+              {speechRequesting ? <LoaderCircle size={17} className="spin" /> : <Mic size={17} />}
+            </button>
             {running ? (
               <button type="button" className="send-button is-stop" onClick={onCancel} aria-label="停止生成">
                 <Square size={14} fill="currentColor" />
               </button>
             ) : (
-              <button type="button" className="send-button" onClick={() => void submit()} disabled={!canSend} aria-label="发送消息">
-                <ArrowUp size={18} />
-              </button>
+                <button type="button" className="send-button" onClick={() => void submit()} disabled={!canSend} aria-label="发送消息">
+                  <ArrowUp size={18} />
+                </button>
             )}
           </div>
         </div>
@@ -2352,25 +2738,44 @@ function Composer({
 
 function LiteratureList({
   records,
+  projects = [],
   activeProjectId,
   compact = false,
+  showProject = false,
   onToggle,
+  onRemove,
+  onDelete,
   onOpen,
 }: {
   records: LiteratureRecord[]
+  projects?: WorkspaceState['projects']
   activeProjectId?: string
   compact?: boolean
-  onToggle: (record: LiteratureRecord) => void
+  showProject?: boolean
+  onToggle: (record: LiteratureRecord, projectId: string) => Promise<void>
+  onRemove?: (record: LiteratureRecord) => Promise<void>
+  onDelete?: (record: LiteratureRecord) => Promise<void>
   onOpen: (record: LiteratureRecord) => void
 }) {
+  const [busyAction, setBusyAction] = useState<string>()
+  const [pendingDeletion, setPendingDeletion] = useState<LiteratureRecord>()
   if (records.length === 0) {
     return <EmptyState icon={BookOpen} title="尚无文献" description="发起检索后，候选文献及其核验状态会显示在这里。" />
   }
 
   return (
+    <>
     <div className={`literature-list${compact ? ' is-compact' : ''}`}>
-      {records.map((record) => (
-        <article key={record.id} className={`literature-item${record.included ? ' is-included' : ''}`}>
+      {records.map((record) => {
+        const owner = projects.find((project) => project.id === record.projectId)
+        const targetProjectId = record.projectId ?? activeProjectId
+        const recordKey = `${record.projectId ?? 'unclassified'}:${record.id}`
+        const toggleBusy = busyAction === `toggle:${recordKey}`
+        const removeBusy = busyAction === `remove:${recordKey}`
+        const deleteBusy = busyAction === `delete:${recordKey}`
+        const canInclude = Boolean(targetProjectId) && record.origin !== 'demo'
+        return (
+        <article key={recordKey} className={`literature-item${record.included ? ' is-included' : ''}`}>
           <button type="button" className="literature-main" onClick={() => onOpen(record)}>
             <span className="literature-icon">
               <FileText size={16} />
@@ -2379,20 +2784,81 @@ function LiteratureList({
               <strong>{record.title}</strong>
               <span>{record.authors.join('、') || '作者未知'}{record.year ? ` · ${record.year}` : ''}</span>
               <small>{record.venue || record.source.toUpperCase()}</small>
+              {showProject && (
+                <small className="literature-project-label"><Folder size={11} /> {owner?.title ?? '未分类'}</small>
+              )}
             </span>
           </button>
           <div className="literature-foot">
             <StatusBadge status={record.verificationStatus}>{verificationLabels[record.verificationStatus]}</StatusBadge>
-            {activeProjectId && (
-              <button type="button" className={record.included ? 'include-button is-included' : 'include-button'} onClick={() => onToggle(record)}>
-                {record.included ? <Check size={13} /> : <Plus size={13} />}
-                {record.included ? '已纳入' : '纳入项目'}
+            <div className="literature-actions">
+              <button
+                type="button"
+                className={record.included ? 'include-button is-included' : 'include-button'}
+                disabled={!canInclude || toggleBusy || removeBusy || deleteBusy}
+                title={!targetProjectId ? '请先选择目标项目' : record.origin === 'demo' ? '演示文献不可用于正式写作' : undefined}
+                aria-label={targetProjectId ? `${record.included ? '取消纳入' : '纳入'}《${record.title}》` : `《${record.title}》尚未选择项目`}
+                onClick={async () => {
+                  if (!targetProjectId) return
+                  setBusyAction(`toggle:${recordKey}`)
+                  try { await onToggle(record, targetProjectId) } finally { setBusyAction(undefined) }
+                }}
+              >
+                {toggleBusy ? <LoaderCircle size={13} className="spin" /> : record.included ? <Check size={13} /> : <Plus size={13} />}
+                {toggleBusy ? '处理中' : record.included ? '取消纳入' : '纳入项目'}
               </button>
-            )}
+              {record.projectId && onRemove && (
+                <button
+                  type="button"
+                  className="remove-literature-button"
+                  disabled={toggleBusy || removeBusy || deleteBusy}
+                  aria-label={`将《${record.title}》移出项目`}
+                  title="移出项目但保留在全部文献中"
+                  onClick={async () => {
+                    setBusyAction(`remove:${recordKey}`)
+                    try { await onRemove(record) } finally { setBusyAction(undefined) }
+                  }}
+                >
+                  {removeBusy ? <LoaderCircle size={13} className="spin" /> : <FolderX size={13} />}
+                  {removeBusy ? '移出中' : '移出项目'}
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  type="button"
+                  className="delete-literature-button"
+                  disabled={toggleBusy || removeBusy || deleteBusy}
+                  aria-label={`删除文献《${record.title}》`}
+                  title="从本机文献库永久删除"
+                  onClick={() => setPendingDeletion(record)}
+                >
+                  <Trash2 size={13} />
+                  删除
+                </button>
+              )}
+            </div>
           </div>
         </article>
-      ))}
+        )
+      })}
     </div>
+    <DeleteLiteratureDialog
+      record={pendingDeletion}
+      busy={Boolean(pendingDeletion && busyAction === `delete:${pendingDeletion.projectId ?? 'unclassified'}:${pendingDeletion.id}`)}
+      onClose={() => !busyAction && setPendingDeletion(undefined)}
+      onConfirm={async () => {
+        if (!pendingDeletion || !onDelete) return
+        const action = `delete:${pendingDeletion.projectId ?? 'unclassified'}:${pendingDeletion.id}`
+        setBusyAction(action)
+        try {
+          await onDelete(pendingDeletion)
+          setPendingDeletion(undefined)
+        } finally {
+          setBusyAction(undefined)
+        }
+      }}
+    />
+    </>
   )
 }
 
@@ -2434,11 +2900,14 @@ function RightWorkspace({
   literature,
   outline,
   sections,
+  sectionVersions,
   selectedSectionId,
   runSteps,
   artifacts,
   activeProjectId,
   onToggleLiterature,
+  onRemoveLiterature,
+  onDeleteLiterature,
   onOpenLiterature,
   onSelectSection,
   onReveal,
@@ -2457,11 +2926,14 @@ function RightWorkspace({
   literature: LiteratureRecord[]
   outline: WorkspaceState['outlines'][string]
   sections: ManuscriptSection[]
+  sectionVersions: ManuscriptSectionVersion[]
   selectedSectionId?: string
   runSteps: AgentStep[]
   artifacts: WorkspaceState['artifacts']
   activeProjectId?: string
-  onToggleLiterature: (record: LiteratureRecord) => void
+  onToggleLiterature: (record: LiteratureRecord, projectId: string) => Promise<void>
+  onRemoveLiterature: (record: LiteratureRecord) => Promise<void>
+  onDeleteLiterature: (record: LiteratureRecord) => Promise<void>
   onOpenLiterature: (record: LiteratureRecord) => void
   onSelectSection: (section: ManuscriptSection) => void
   onReveal: (path: string) => void
@@ -2593,7 +3065,7 @@ function RightWorkspace({
               </div>
               <div>
                 <strong>{literature.filter((item) => item.verificationStatus === 'verified-metadata').length}</strong>
-                <span>已核验</span>
+                <span>来源已记录</span>
               </div>
               <div>
                 <strong>{literature.filter((item) => ['demo', 'unverified'].includes(item.verificationStatus)).length}</strong>
@@ -2605,6 +3077,8 @@ function RightWorkspace({
               activeProjectId={activeProjectId}
               compact
               onToggle={onToggleLiterature}
+              onRemove={onRemoveLiterature}
+              onDelete={onDeleteLiterature}
               onOpen={onOpenLiterature}
             />
           </>
@@ -2635,6 +3109,7 @@ function RightWorkspace({
               <OutlineTree
                 nodes={outlineNodes}
                 sections={sections}
+                sectionVersions={sectionVersions}
                 selectedSectionId={selectedSectionId}
                 onSelectSection={onSelectSection}
               />
@@ -2690,6 +3165,104 @@ function RightWorkspace({
         )}
       </div>
     </aside>
+  )
+}
+
+function DeleteLiteratureDialog({
+  record,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  record?: LiteratureRecord
+  busy: boolean
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const dialogRef = useRef<HTMLElement>(null)
+  const cancelButtonRef = useRef<HTMLButtonElement>(null)
+  const previousFocusRef = useRef<HTMLElement | null>(null)
+  const busyRef = useRef(busy)
+  const onCloseRef = useRef(onClose)
+  busyRef.current = busy
+  onCloseRef.current = onClose
+
+  useEffect(() => {
+    if (!record) return
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const focusFrame = window.requestAnimationFrame(() => cancelButtonRef.current?.focus())
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !busyRef.current) {
+        event.preventDefault()
+        onCloseRef.current()
+      }
+      if (event.key !== 'Tab') return
+      const focusable = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? [],
+      )
+      if (focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.cancelAnimationFrame(focusFrame)
+      window.removeEventListener('keydown', onKeyDown)
+      previousFocusRef.current?.focus()
+    }
+  }, [record?.id])
+
+  if (!record) return null
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}>
+      <section
+        ref={dialogRef}
+        tabIndex={-1}
+        className="modal delete-project-modal"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="delete-literature-title"
+        aria-describedby="delete-literature-description"
+      >
+        <header className="modal-header">
+          <div>
+            <span className="modal-icon is-danger"><Trash2 size={18} /></span>
+            <div>
+              <h2 id="delete-literature-title">删除这篇文献？</h2>
+              <p id="delete-literature-description">“{record.title}”将从本机文献库永久删除，且无法撤销。</p>
+            </div>
+          </div>
+          <IconButton icon={X} label="关闭" onClick={onClose} disabled={busy} />
+        </header>
+        <div className="delete-project-body">
+          <div className="delete-project-impact">
+            <strong>将从应用内删除</strong>
+            <p>书目信息、摘要、核验状态和项目归属记录。</p>
+          </div>
+          <div className="delete-project-preserved">
+            <ExternalLink size={17} aria-hidden="true" />
+            <div>
+              <strong>原始论文不受影响</strong>
+              <p>不会删除在线论文、已经导出的文稿或研究文件夹；正在被正文引用的文献会被阻止删除。</p>
+            </div>
+          </div>
+        </div>
+        <footer className="modal-footer delete-project-footer">
+          <button ref={cancelButtonRef} type="button" className="secondary-button" onClick={onClose} disabled={busy}>取消</button>
+          <button type="button" className="danger-button" onClick={onConfirm} disabled={busy} aria-busy={busy}>
+            {busy ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}
+            {busy ? '正在删除' : '永久删除'}
+          </button>
+        </footer>
+      </section>
+    </div>
   )
 }
 
@@ -2939,7 +3512,19 @@ function NewProjectDialog({ open, busy, onClose, onCreate }: { open: boolean; bu
   )
 }
 
-function LiteratureDetail({ record, onClose, onOpen }: { record?: LiteratureRecord; onClose: () => void; onOpen: (url: string) => void }) {
+function LiteratureDetail({
+  record,
+  project,
+  citationCount = 0,
+  onClose,
+  onOpen,
+}: {
+  record?: LiteratureRecord
+  project?: WorkspaceState['projects'][number]
+  citationCount?: number
+  onClose: () => void
+  onOpen: (url: string) => void
+}) {
   if (!record) {
     return (
       <aside className="detail-panel">
@@ -2958,6 +3543,7 @@ function LiteratureDetail({ record, onClose, onOpen }: { record?: LiteratureReco
         <StatusBadge status={record.verificationStatus}>{verificationLabels[record.verificationStatus]}</StatusBadge>
         <h2>{record.title}</h2>
         <dl className="metadata-list">
+          <div><dt>所属项目</dt><dd>{project?.title ?? '未分类（仅保留在全部文献）'}</dd></div>
           <div><dt>作者</dt><dd>{record.authors.join('、') || '未知'}</dd></div>
           <div><dt>年份</dt><dd>{record.year ?? '未知'}</dd></div>
           <div><dt>期刊 / 来源</dt><dd>{record.venue || record.source.toUpperCase()}</dd></div>
@@ -2969,9 +3555,29 @@ function LiteratureDetail({ record, onClose, onOpen }: { record?: LiteratureReco
         </section>
         <div className="evidence-checklist">
           <h3>可用性检查</h3>
-          <p><CircleCheck size={15} /> 书目信息已收录</p>
-          <p className={record.abstract ? '' : 'is-muted'}>{record.abstract ? <CircleCheck size={15} /> : <CircleAlert size={15} />} {record.abstract ? '摘要可阅读' : '摘要不可用'}</p>
-          <p className="is-muted"><CircleAlert size={15} /> 尚未判断是否支持当前正文主张</p>
+          <p className={record.verificationStatus === 'verified-metadata' ? '' : 'is-warning'}>
+            {record.verificationStatus === 'verified-metadata' ? <CircleCheck size={15} /> : <CircleAlert size={15} />}
+            {record.verificationStatus === 'verified-metadata'
+              ? '公开来源已返回书目信息'
+              : '书目信息已收录，尚未由公开来源确认'}
+          </p>
+          <p className={record.abstract ? '' : 'is-warning'}>
+            {record.abstract ? <CircleCheck size={15} /> : <CircleAlert size={15} />}
+            {record.abstract ? '来源摘要已获取' : '当前来源未返回摘要'}
+          </p>
+          <p className={record.url ? '' : 'is-warning'}>
+            {record.url ? <CircleCheck size={15} /> : <CircleAlert size={15} />}
+            {record.url ? '原始来源链接已收录' : '缺少原始来源链接'}
+          </p>
+          <p className={citationCount > 0 ? 'is-warning' : 'is-muted'}>
+            <CircleAlert size={15} />
+            {citationCount > 0
+              ? `已映射 ${citationCount} 处正文引用，仍需核对原文支持`
+              : '尚未用于正文引用'}
+          </p>
+          <small className="evidence-boundary">
+            当前检查只验证元数据、摘要、来源链接和引用映射；未取得可核对的全文证据时，不会自动判断该文献是否支持正文主张。
+          </small>
         </div>
         {record.url && (
           <button type="button" className="secondary-button detail-link" onClick={() => onOpen(record.url!)}>
@@ -3019,12 +3625,19 @@ function LibraryPage({
   const [searching, setSearching] = useState(false)
   const [selected, setSelected] = useState<LiteratureRecord | undefined>(initialSelected)
   const [filter, setFilter] = useState<'all' | 'included' | 'verified' | 'pending'>('all')
+  const [scopeProjectId, setScopeProjectId] = useState<string | 'all'>('all')
   const [sourceKey, setSourceKey] = useState(defaultArxivSource?.key ?? 'public')
   const sourceInitializedRef = useRef(Boolean(defaultArxivSource))
 
   useEffect(() => {
     if (initialSelected) setSelected(initialSelected)
   }, [initialSelected?.id])
+
+  useEffect(() => {
+    if (scopeProjectId !== 'all' && !workspace.projects.some((project) => project.id === scopeProjectId)) {
+      setScopeProjectId(activeProjectId ?? 'all')
+    }
+  }, [scopeProjectId, activeProjectId, workspace.projects])
 
   useEffect(() => {
     if (sourceInitializedRef.current || !defaultArxivSource) return
@@ -3038,12 +3651,25 @@ function LibraryPage({
     }
   }, [sourceKey, mcpSources.map((source) => source.key).join('|')])
 
-  const records = workspace.literature.filter((item) => {
+  const scopedRecords = workspace.literature.filter(
+    (item) => scopeProjectId === 'all' || item.projectId === scopeProjectId,
+  )
+  const records = scopedRecords.filter((item) => {
     if (filter === 'included') return item.included
     if (filter === 'verified') return item.verificationStatus === 'verified-metadata'
     if (filter === 'pending') return item.verificationStatus !== 'verified-metadata'
     return true
   })
+  const selectedScopeProject = scopeProjectId === 'all'
+    ? undefined
+    : workspace.projects.find((project) => project.id === scopeProjectId)
+  const searchTargetProjectId = selectedScopeProject?.id ?? activeProjectId
+  const searchTargetProject = workspace.projects.find((project) => project.id === searchTargetProjectId)
+
+  useEffect(() => {
+    if (selected && records.some((record) => record.id === selected.id)) return
+    setSelected(records[0])
+  }, [scopeProjectId, filter, workspace.literature])
 
   const search = async (event: FormEvent) => {
     event.preventDefault()
@@ -3052,7 +3678,7 @@ function LibraryPage({
     try {
       const mcpSource = mcpSources.find((source) => source.key === sourceKey)
       const results = await paperAgent.literature.search({
-        projectId: activeProjectId,
+        projectId: searchTargetProjectId,
         query: query.trim(),
         limit: 30,
         mcp: mcpSource
@@ -3073,13 +3699,40 @@ function LibraryPage({
     }
   }
 
-  const toggle = async (record: LiteratureRecord) => {
-    if (!activeProjectId) return
+  const toggle = async (record: LiteratureRecord, projectId: string) => {
     try {
-      await paperAgent.literature.toggle(activeProjectId, record.id, !record.included)
+      await paperAgent.literature.toggle(projectId, record.id, !record.included)
       await onRefresh()
     } catch (error) {
       onToast(error instanceof Error ? error.message : '更新文献失败', 'error')
+    }
+  }
+
+  const removeFromProject = async (record: LiteratureRecord) => {
+    try {
+      await paperAgent.literature.setProject({
+        literatureId: record.id,
+        sourceProjectId: record.projectId ?? null,
+      })
+      await onRefresh()
+      onToast('已移出项目，文献仍保留在“全部文献”中')
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : '移出项目失败', 'error')
+    }
+  }
+
+  const deleteLiterature = async (record: LiteratureRecord) => {
+    try {
+      await paperAgent.literature.delete({
+        literatureId: record.id,
+        sourceProjectId: record.projectId ?? null,
+      })
+      if (selected?.id === record.id && selected?.projectId === record.projectId) setSelected(undefined)
+      await onRefresh()
+      onToast('文献已从本机文献库删除')
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : '删除文献失败', 'error')
+      throw error
     }
   }
 
@@ -3091,8 +3744,34 @@ function LibraryPage({
           <h1>文献检索与证据核验</h1>
           <p>区分书目信息、摘要可用性和主张支持情况，避免把“检索到”误当作“可以引用”。</p>
         </div>
-        {workspace.settings.demoMode && <StatusBadge status="demo">演示结果不可引用</StatusBadge>}
+        {selectedScopeProject?.origin === 'demo' && <StatusBadge status="demo">项目仍为演示状态</StatusBadge>}
       </header>
+      <nav className="library-project-scopes" aria-label="按研究项目查看文献">
+        <button
+          type="button"
+          className={scopeProjectId === 'all' ? 'is-active' : ''}
+          aria-current={scopeProjectId === 'all' ? 'page' : undefined}
+          onClick={() => setScopeProjectId('all')}
+        >
+          <Library size={14} />
+          <span>全部文献</span>
+          <small>{workspace.literature.length}</small>
+        </button>
+        {workspace.projects.map((project) => (
+          <button
+            type="button"
+            key={project.id}
+            className={scopeProjectId === project.id ? 'is-active' : ''}
+            aria-current={scopeProjectId === project.id ? 'page' : undefined}
+            onClick={() => setScopeProjectId(project.id)}
+            title={project.title}
+          >
+            <Folder size={14} />
+            <span>{project.title}</span>
+            <small>{workspace.literature.filter((record) => record.projectId === project.id).length}</small>
+          </button>
+        ))}
+      </nav>
       <form className="library-search" onSubmit={search}>
         <Search size={18} />
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="输入关键词、论文标题或 DOI" />
@@ -3107,17 +3786,22 @@ function LibraryPage({
             <option key={source.key} value={source.key}>{source.label}</option>
           ))}
         </select>
-        <button type="submit" className="primary-button compact" disabled={!query.trim() || searching}>
+        <button type="submit" className="primary-button compact" disabled={!query.trim() || searching || !searchTargetProjectId}>
           {searching ? <LoaderCircle size={15} className="spin" /> : <Search size={15} />}
           {searching ? '检索中' : '检索文献'}
         </button>
       </form>
+      <div className="library-search-context">
+        {searchTargetProject
+          ? <>检索结果保存到：<strong>{searchTargetProject.title}</strong></>
+          : '请先创建或选择一个研究项目后再检索。'}
+      </div>
       <div className="library-toolbar">
         <div className="filter-segment">
           {([
             ['all', '全部'],
             ['included', '已纳入'],
-            ['verified', '已核验'],
+            ['verified', '来源已记录'],
             ['pending', '待核验'],
           ] as const).map(([value, label]) => (
             <button type="button" key={value} className={filter === value ? 'is-active' : ''} onClick={() => setFilter(value)}>{label}</button>
@@ -3127,9 +3811,27 @@ function LibraryPage({
       </div>
       <div className="library-body">
         <main className="library-results">
-          <LiteratureList records={records} activeProjectId={activeProjectId} onToggle={toggle} onOpen={setSelected} />
+          <LiteratureList
+            records={records}
+            projects={workspace.projects}
+            activeProjectId={searchTargetProjectId}
+            showProject={scopeProjectId === 'all'}
+            onToggle={toggle}
+            onRemove={removeFromProject}
+            onDelete={deleteLiterature}
+            onOpen={setSelected}
+          />
         </main>
-        <LiteratureDetail record={selected} onClose={() => setSelected(undefined)} onOpen={(url) => paperAgent.external.open(url)} />
+        <LiteratureDetail
+          record={selected}
+          project={workspace.projects.find((project) => project.id === selected?.projectId)}
+          citationCount={workspace.citations.filter((citation) => (
+            citation.literatureId === selected?.id
+            && citation.projectId === selected?.projectId
+          )).length}
+          onClose={() => setSelected(undefined)}
+          onOpen={(url) => paperAgent.external.open(url)}
+        />
       </div>
     </section>
   )
@@ -3753,14 +4455,101 @@ function PlannedSetting({
   )
 }
 
+function VoiceSettings({
+  systemPermissions,
+  onRequestMicrophone,
+  onRefreshPermissions,
+  onOpenSystemSettings,
+  onToast,
+}: {
+  systemPermissions?: SystemPermissionSnapshot
+  onRequestMicrophone: () => Promise<SystemPermissionSnapshot>
+  onRefreshPermissions: () => Promise<SystemPermissionSnapshot>
+  onOpenSystemSettings: (kind: SystemPermissionKind) => Promise<void>
+  onToast: (message: string, tone?: 'success' | 'error') => void
+}) {
+  const [busy, setBusy] = useState<'request' | 'refresh'>()
+  const microphoneStatus = systemPermissions?.microphone ?? 'unknown'
+  const recognitionAvailable = Boolean(getSpeechRecognitionConstructor())
+  const platformSupported = systemPermissions?.platform !== 'unsupported'
+
+  const requestMicrophone = async () => {
+    if (busy) return
+    setBusy('request')
+    try {
+      const next = await onRequestMicrophone()
+      if (next.microphone === 'granted') onToast('麦克风权限已授权，可以在输入框使用语音输入')
+      else onToast('麦克风权限尚未授予，请在系统设置中允许学术 Agent 使用麦克风', 'error')
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : '申请麦克风权限失败', 'error')
+    } finally {
+      setBusy(undefined)
+    }
+  }
+
+  const refreshPermissions = async () => {
+    if (busy) return
+    setBusy('refresh')
+    try {
+      const next = await onRefreshPermissions()
+      onToast(next.microphone === 'granted' ? '麦克风权限已确认' : '麦克风权限仍未授予', next.microphone === 'granted' ? 'success' : 'error')
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : '重新检查麦克风权限失败', 'error')
+    } finally {
+      setBusy(undefined)
+    }
+  }
+
+  return (
+    <section className="settings-hub-page">
+      <SettingsSectionHeader section="voice" />
+      <div className="settings-content-column">
+        <h2>语音输入</h2>
+        <section className="settings-card voice-settings-card">
+          <div className="settings-card-row">
+            <span className="settings-card-icon"><Mic size={17} /></span>
+            <span className="settings-card-copy"><strong>麦克风权限</strong><small>{systemPermissions ? `当前状态：${permissionStatusLabels[microphoneStatus]}` : '正在读取 macOS 麦克风授权状态。'}</small></span>
+            <StatusBadge status={microphoneStatus === 'granted' ? 'connected' : microphoneStatus === 'unsupported' ? 'demo' : 'failed'}>{permissionStatusLabels[microphoneStatus]}</StatusBadge>
+            <button type="button" className="secondary-button compact" onClick={() => void requestMicrophone()} disabled={Boolean(busy) || !platformSupported}>
+              {busy === 'request' ? <LoaderCircle size={14} className="spin" /> : <Mic size={14} />} 请求权限
+            </button>
+          </div>
+          <div className="settings-card-row">
+            <span className="settings-card-icon"><Activity size={17} /></span>
+            <span className="settings-card-copy"><strong>系统语音识别</strong><small>使用当前桌面内置的 Web Speech Recognition；识别文本只会插入输入框，不会自动发送。</small></span>
+            <StatusBadge status={recognitionAvailable ? 'connected' : 'failed'}>{recognitionAvailable ? '可用' : '不可用'}</StatusBadge>
+          </div>
+          <div className="settings-card-row">
+            <span className="settings-card-icon"><FileText size={17} /></span>
+            <span className="settings-card-copy"><strong>默认语言</strong><small>语音识别使用简体中文，识别过程中保留实时中间结果。</small></span>
+            <span className="voice-language-value">简体中文（zh-CN）</span>
+          </div>
+        </section>
+        <div className="voice-settings-actions">
+          <button type="button" className="secondary-button" onClick={() => void refreshPermissions()} disabled={Boolean(busy)}>
+            {busy === 'refresh' ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />} 重新检查
+          </button>
+          <button type="button" className="secondary-button" onClick={() => { void onOpenSystemSettings('microphone') }} disabled={!platformSupported || Boolean(busy)}>
+            <ExternalLink size={15} /> 打开系统设置
+          </button>
+        </div>
+        <div className="settings-boundary-note"><CircleAlert size={16} /><span>语音按钮只在获得真实麦克风授权且当前环境支持语音识别时启动；权限被拒绝、设备不可用或识别服务出错时，应用会保留已有文字并显示错误提示。</span></div>
+      </div>
+    </section>
+  )
+}
+
 function SettingsPage({
   section,
   workspace,
   systemPermissions,
   choosingFolder,
   onRefresh,
+  onRefreshPermissions,
   onToast,
   onManagePermissions,
+  onRequestMicrophone,
+  onOpenSystemSettings,
   onChooseFolder,
   onOpenSkills,
   onAppearanceChange,
@@ -3774,8 +4563,11 @@ function SettingsPage({
   systemPermissions?: SystemPermissionSnapshot
   choosingFolder: boolean
   onRefresh: () => Promise<void>
+  onRefreshPermissions: () => Promise<SystemPermissionSnapshot>
   onToast: (message: string, tone?: 'success' | 'error') => void
   onManagePermissions: () => void
+  onRequestMicrophone: () => Promise<SystemPermissionSnapshot>
+  onOpenSystemSettings: (kind: SystemPermissionKind) => Promise<void>
   onChooseFolder: () => void
   onOpenSkills: () => void
   onAppearanceChange: (input: AppearanceSettingsInput) => Promise<void>
@@ -3797,6 +4589,18 @@ function SettingsPage({
         onChange={onAppearanceChange}
         onImport={onAppearanceImport}
         onCopy={onAppearanceCopy}
+        onToast={onToast}
+      />
+    )
+  }
+
+  if (section === 'voice') {
+    return (
+      <VoiceSettings
+        systemPermissions={systemPermissions}
+        onRequestMicrophone={onRequestMicrophone}
+        onRefreshPermissions={onRefreshPermissions}
+        onOpenSystemSettings={onOpenSystemSettings}
         onToast={onToast}
       />
     )
@@ -3910,8 +4714,7 @@ function SettingsPage({
   }
 
   const plannedAction = (name: string) => onToast(`${name}入口已经建立，系统能力将在后续版本接入`)
-  const plannedContent: Record<Exclude<SettingsSection, 'general' | 'appearance' | 'configuration' | 'personalization' | 'shortcuts' | 'archived'>, Array<[LucideIcon, string, string]>> = {
-    voice: [[Mic, '语音转写', '入口已保留；麦克风授权、录音与本机转写尚未接入。']],
+  const plannedContent: Record<Exclude<SettingsSection, 'general' | 'appearance' | 'voice' | 'configuration' | 'personalization' | 'shortcuts' | 'archived'>, Array<[LucideIcon, string, string]>> = {
     'app-snapshot': [[Camera, '连续按两次 Command', '计划捕获当前应用窗口并作为本轮对话附件；当前不会监听全局键盘或截取屏幕。']],
     browser: [[ExternalLink, '受控浏览器', '计划由用户明确启动网页研究任务；当前不会读取浏览器历史或标签页。']],
     'computer-control': [[Monitor, '电脑控制', '计划复用真实 macOS 权限中心；当前不会自动点击、输入或控制其他应用。']],
@@ -4180,6 +4983,8 @@ export function App() {
   const [editingSection, setEditingSection] = useState(false)
   const [sectionDraft, setSectionDraft] = useState('')
   const [savingSection, setSavingSection] = useState(false)
+  const [selectingSectionVersionId, setSelectingSectionVersionId] = useState<string>()
+  const [sectionGenerationCandidate, setSectionGenerationCandidate] = useState<SectionGenerationCandidate>()
   const [generatingOutline, setGeneratingOutline] = useState(false)
   const [exporting, setExporting] = useState<'md' | 'docx'>()
   const [permissionCenterOpen, setPermissionCenterOpen] = useState(false)
@@ -4191,21 +4996,7 @@ export function App() {
 
   const refreshWorkspace = async () => {
     const next = await paperAgent.workspace.get()
-    setWorkspace((current) => {
-      for (const streamed of current.sections.filter((section) => section.status === 'generating')) {
-        const persisted = next.sections.find((section) => section.id === streamed.id)
-        if (!persisted || persisted.status !== 'generating') continue
-        if (streamed.content.length > persisted.content.length) persisted.content = streamed.content
-        if ((streamed.reasoningContent?.length ?? 0) > (persisted.reasoningContent?.length ?? 0)) {
-          persisted.reasoningContent = streamed.reasoningContent
-        }
-        persisted.wordCount = Math.max(persisted.wordCount, streamed.wordCount)
-        persisted.generationProviderId = streamed.generationProviderId
-        persisted.generationModel = streamed.generationModel
-        persisted.thinkingRequested = streamed.thinkingRequested
-      }
-      return next
-    })
+    setWorkspace(next)
   }
 
   useEffect(() => {
@@ -4277,6 +5068,26 @@ export function App() {
 
   useEffect(() => {
     const dispose = paperAgent.section.onEvent((event) => {
+      if (event.type === 'started') {
+        setSectionGenerationCandidate({
+          sectionId: event.sectionId,
+          content: '',
+          reasoningContent: '',
+          providerId: event.providerId,
+          model: event.model,
+          thinkingRequested: event.thinkingRequested,
+        })
+      } else if (event.type === 'text-delta') {
+        setSectionGenerationCandidate((current) => current?.sectionId === event.sectionId
+          ? { ...current, content: `${current.content}${event.delta}` }
+          : current)
+      } else if (event.type === 'reasoning-delta') {
+        setSectionGenerationCandidate((current) => current?.sectionId === event.sectionId
+          ? { ...current, reasoningContent: `${current.reasoningContent}${event.delta}` }
+          : current)
+      } else {
+        setSectionGenerationCandidate((current) => current?.sectionId === event.sectionId ? undefined : current)
+      }
       setWorkspace((current) => {
         const next = structuredClone(current)
         const index = next.sections.findIndex((section) => section.id === event.sectionId)
@@ -4284,18 +5095,10 @@ export function App() {
         const section = next.sections[index]
         if (event.type === 'started') {
           section.status = 'generating'
-          section.content = ''
-          section.wordCount = 0
-          section.reasoningContent = undefined
           section.generationError = undefined
           section.generationProviderId = event.providerId
           section.generationModel = event.model
           section.thinkingRequested = event.thinkingRequested
-        } else if (event.type === 'text-delta') {
-          section.content += event.delta
-          section.wordCount = section.content.replace(/\s+/g, '').length
-        } else if (event.type === 'reasoning-delta') {
-          section.reasoningContent = `${section.reasoningContent ?? ''}${event.delta}`
         } else if (event.type === 'completed' || event.type === 'error') {
           next.sections[index] = event.section
         }
@@ -4331,10 +5134,27 @@ export function App() {
   const messages = workspace.messages
     .filter((item) => item.conversationId === conversation?.id && ['user', 'assistant'].includes(item.role))
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-  const projectLiterature = workspace.literature.filter((item) => item.projectId === activeProject?.id || item.included)
+  // 右侧文献栏和消息“已添加”状态必须严格限定当前项目，不能被其他项目的同题文献污染。
+  const projectLiterature = workspace.literature.filter((item) => item.projectId === activeProject?.id)
   const outline = activeProject ? workspace.outlines[activeProject.id] ?? [] : []
   const sections = workspace.sections.filter((item) => item.projectId === activeProject?.id)
+  const projectSectionVersions = workspace.sectionVersions.filter((item) => item.projectId === activeProject?.id)
   const selectedSection = sections.find((item) => item.id === selectedSectionId) ?? sections.find((item) => item.id === activeProject?.activeSectionId) ?? sections[0]
+  const displaySection: ManuscriptSection | undefined = selectedSection && sectionGenerationCandidate?.sectionId === selectedSection.id
+    ? {
+        ...selectedSection,
+        content: sectionGenerationCandidate.content,
+        reasoningContent: sectionGenerationCandidate.reasoningContent || undefined,
+        status: 'generating',
+        wordCount: sectionGenerationCandidate.content.replace(/\s+/g, '').length,
+        activeGenerationVersionId: undefined,
+        generationError: undefined,
+        generationProviderId: sectionGenerationCandidate.providerId,
+        generationModel: sectionGenerationCandidate.model,
+        thinkingRequested: sectionGenerationCandidate.thinkingRequested,
+      }
+    : selectedSection
+  const selectedSectionVersions = workspace.sectionVersions.filter((item) => item.sectionId === selectedSection?.id)
   const activeRun = workspace.runs.filter((item) => item.projectId === activeProject?.id).at(-1)
   const artifacts = workspace.artifacts.filter((item) => item.projectId === activeProject?.id)
   const projectPendingDeletion = workspace.projects.find((item) => item.id === projectPendingDeletionId)
@@ -4346,7 +5166,8 @@ export function App() {
   useEffect(() => {
     setSectionDraft(selectedSection?.content ?? '')
     setEditingSection(false)
-  }, [selectedSection?.id])
+    setSelectingSectionVersionId(undefined)
+  }, [selectedSection?.activeGenerationVersionId, selectedSection?.id])
 
   const showToast = (message: string, tone: 'success' | 'error' = 'success') => setToast({ message, tone })
 
@@ -4659,6 +5480,7 @@ export function App() {
 
   const selectSection = async (section: ManuscriptSection) => {
     const previousSectionId = selectedSection?.id
+    setSelectingSectionVersionId(undefined)
     setSelectedSectionId(section.id)
     setCenterMode('manuscript')
     try {
@@ -4738,13 +5560,68 @@ export function App() {
     }
   }
 
-  const toggleLiterature = async (record: LiteratureRecord) => {
-    if (!activeProject) return
+  const toggleLiterature = async (record: LiteratureRecord, projectId?: string) => {
+    const targetProjectId = projectId ?? activeProject?.id
+    if (!targetProjectId) return
     try {
-      await paperAgent.literature.toggle(activeProject.id, record.id, !record.included)
+      await paperAgent.literature.toggle(targetProjectId, record.id, !record.included)
       await refreshWorkspace()
     } catch (error) {
       showToast(error instanceof Error ? error.message : '更新文献失败', 'error')
+    }
+  }
+
+  const removeLiteratureFromProject = async (record: LiteratureRecord) => {
+    try {
+      await paperAgent.literature.setProject({
+        literatureId: record.id,
+        sourceProjectId: record.projectId ?? null,
+      })
+      await refreshWorkspace()
+      showToast('已移出项目，文献仍保留在“全部文献”中')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '移出项目失败', 'error')
+    }
+  }
+
+  const deleteLiterature = async (record: LiteratureRecord) => {
+    try {
+      await paperAgent.literature.delete({
+        literatureId: record.id,
+        sourceProjectId: record.projectId ?? null,
+      })
+      if (selectedLiterature?.id === record.id && selectedLiterature?.projectId === record.projectId) {
+        setSelectedLiterature(undefined)
+      }
+      await refreshWorkspace()
+      showToast('文献已从本机文献库删除')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '删除文献失败', 'error')
+      throw error
+    }
+  }
+
+  const addMessageLiterature = async (messageId: string, candidateId: string) => {
+    try {
+      const records = await paperAgent.literature.addFromMessage({
+        messageId,
+        candidateIds: [candidateId],
+      })
+      setWorkspace((current) => {
+        const ids = new Set(records.map((record) => record.id))
+        return {
+          ...current,
+          literature: [
+            ...current.literature.filter((record) => !ids.has(record.id)),
+            ...records,
+          ],
+        }
+      })
+      setRightTab('literature')
+      setRightOpen(true)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '添加文献失败', 'error')
+      throw error
     }
   }
 
@@ -4763,17 +5640,46 @@ export function App() {
     }
   }
 
-  const generateSection = async () => {
-    if (!activeProject || !selectedSection || !activeProviderId || !activeModel) return
+  const selectSectionVersion = async (versionId: string) => {
+    if (!selectedSection || selectingSectionVersionId) return
     const sectionId = selectedSection.id
+    setSelectingSectionVersionId(versionId)
+    try {
+      await paperAgent.section.selectVersion(sectionId, versionId)
+      await refreshWorkspace()
+      setEditingSection(false)
+      showToast('已切换章节版本')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '切换章节版本失败', 'error')
+    } finally {
+      setSelectingSectionVersionId(undefined)
+    }
+  }
+
+  const generateSection = async () => {
+    if (!activeProject || !selectedSection) return
+    if (sectionGenerationCandidate) {
+      showToast('已有章节正在生成，请等待完成后再开始下一章', 'error')
+      return
+    }
+    if (!activeProviderId || !activeModel) {
+      showToast('请先配置并选择可用模型', 'error')
+      return
+    }
+    const sectionId = selectedSection.id
+    setSectionGenerationCandidate({
+      sectionId,
+      content: '',
+      reasoningContent: '',
+      providerId: activeProviderId,
+      model: activeModel,
+      thinkingRequested: false,
+    })
     setWorkspace((current) => {
       const next = structuredClone(current)
       const section = next.sections.find((item) => item.id === sectionId)
       if (section) {
         section.status = 'generating'
-        section.content = ''
-        section.wordCount = 0
-        section.reasoningContent = undefined
         section.generationError = undefined
         section.generationProviderId = activeProviderId
         section.generationModel = activeModel
@@ -4783,9 +5689,11 @@ export function App() {
     try {
       await paperAgent.section.generate({ projectId: activeProject.id, sectionId, providerId: activeProviderId, model: activeModel })
       await refreshWorkspace()
+      setSectionGenerationCandidate((current) => current?.sectionId === sectionId ? undefined : current)
       showToast('章节草稿已生成')
     } catch (error) {
       await refreshWorkspace().catch(() => undefined)
+      setSectionGenerationCandidate((current) => current?.sectionId === sectionId ? undefined : current)
       showToast('章节生成中断，已保留模型返回的正文片段', 'error')
     }
   }
@@ -4953,20 +5861,29 @@ export function App() {
               <div className={`center-body${centerMode === 'manuscript' ? ' is-manuscript' : ''}`}>
                 <div className="center-scroll">
                   {centerMode === 'chat' ? (
-                    <ChatView messages={messages} projectTitle={activeProject.title} onShowLiterature={() => { setRightTab('literature'); setRightOpen(true) }} />
+                    <ChatView
+                      messages={messages}
+                      projectTitle={activeProject.title}
+                      literature={projectLiterature}
+                      onAddLiterature={addMessageLiterature}
+                      onShowLiterature={() => { setRightTab('literature'); setRightOpen(true) }}
+                    />
                   ) : (
                     <ManuscriptView
-                      section={selectedSection}
-                      generationProviderName={workspace.providers.find((provider) => provider.id === selectedSection?.generationProviderId)?.name}
+                      section={displaySection}
+                      sectionVersions={selectedSectionVersions}
+                      generationProviderName={workspace.providers.find((provider) => provider.id === displaySection?.generationProviderId)?.name}
                       canGenerateOutline={Boolean(activeProviderId && activeModel)}
                       generatingOutline={generatingOutline}
                       isEditing={editingSection}
                       draft={sectionDraft}
                       saving={savingSection}
+                      selectingVersionId={selectingSectionVersionId}
                       onDraft={setSectionDraft}
                       onEdit={() => setEditingSection(true)}
                       onSave={saveSection}
                       onGenerate={generateSection}
+                      onSelectVersion={selectSectionVersion}
                       onGenerateOutline={generateOutline}
                       onConfigureModel={() => openSettings('configuration')}
                     />
@@ -4989,12 +5906,13 @@ export function App() {
                   onUpdateConversation={updateConversation}
                   onChooseAttachments={chooseConversationAttachments}
                   onRemoveAttachment={removeConversationAttachment}
-                  onRequestAccessMode={requestConversationAccessMode}
-                  onManagePermissions={() => {
-                    setPermissionCenterOpen(true)
-                    void refreshSystemPermissions()
-                  }}
-                />
+                onRequestAccessMode={requestConversationAccessMode}
+                onManagePermissions={() => {
+                  setPermissionCenterOpen(true)
+                  void refreshSystemPermissions()
+                }}
+                onToast={showToast}
+              />
               </div>
             )}
           </section>
@@ -5006,11 +5924,14 @@ export function App() {
               literature={projectLiterature}
               outline={outline}
               sections={sections}
+              sectionVersions={projectSectionVersions}
               selectedSectionId={selectedSection?.id}
               runSteps={activeRun?.steps ?? []}
               artifacts={artifacts}
               activeProjectId={activeProject.id}
               onToggleLiterature={toggleLiterature}
+              onRemoveLiterature={removeLiteratureFromProject}
+              onDeleteLiterature={deleteLiterature}
               onOpenLiterature={(record) => { setSelectedLiterature(record); setRoute('library') }}
               onSelectSection={selectSection}
               onReveal={(path) => paperAgent.export.reveal(path)}
@@ -5058,11 +5979,23 @@ export function App() {
             systemPermissions={systemPermissions}
             choosingFolder={choosingFolder}
             onRefresh={refreshWorkspace}
+            onRefreshPermissions={refreshSystemPermissions}
             onToast={showToast}
             onManagePermissions={() => {
               setPermissionCenterOpen(true)
               void refreshSystemPermissions()
             }}
+            onRequestMicrophone={async () => {
+              setPermissionBusy(true)
+              try {
+                const next = await paperAgent.systemPermissions.requestMicrophone()
+                setSystemPermissions(next)
+                return next
+              } finally {
+                setPermissionBusy(false)
+              }
+            }}
+            onOpenSystemSettings={openSystemPermissionSettings}
             onChooseFolder={chooseResearchFolder}
             onOpenSkills={() => setRoute('skills')}
             onAppearanceChange={updateAppearance}

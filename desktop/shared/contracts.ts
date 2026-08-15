@@ -82,12 +82,14 @@ export type SystemPermissionKind =
   | 'accessibility'
   | 'full-disk-access'
   | 'screen-recording'
+  | 'microphone'
 
 export interface SystemPermissionSnapshot {
   platform: 'macos' | 'unsupported'
   accessibility: SystemPermissionStatus
   fullDiskAccess: SystemPermissionStatus
   screenRecording: SystemPermissionStatus
+  microphone: SystemPermissionStatus
   /** 完全访问只在应用确实拥有辅助功能和完全磁盘访问后才能启用。 */
   fullAccessReady: boolean
   checkedAt: string
@@ -229,8 +231,56 @@ export interface ChatMessage extends BaseEntity {
   model?: string
   contextScope?: 'project' | 'manuscript' | 'section' | 'selection'
   contextReferences?: ChatContextReference[]
+  /** 本轮真实 MCP 返回且可由用户加入右侧文献栏的结构化文献候选。 */
+  literatureCandidates?: MessageLiteratureCandidate[]
   runId?: string
   error?: string
+}
+
+/**
+ * 助手消息绑定的文献候选只来自真实 MCP 结构化返回，不从模型正文猜测。
+ * 用户点击添加后，主进程会再次按消息和项目归属校验再写入文献库。
+ */
+export interface MessageLiteratureCandidate {
+  id: string
+  title: string
+  authors: string[]
+  year?: number
+  venue?: string
+  abstract?: string
+  doi?: string
+  url?: string
+  /** MCP 结果中的明确标识（如 arXiv ID 或 DOI），用于与正文引用精确核对。 */
+  referenceIds?: string[]
+  /** 候选对应的本机 MCP 审计记录；不包含凭证或原始请求头。 */
+  provenance?: {
+    runId: string
+    stepId: string
+    serverId: string
+    toolName: string
+    resultSha256: string
+  }
+  source: 'mcp'
+}
+
+export interface LiteratureAddFromMessageInput {
+  messageId: string
+  candidateIds: string[]
+}
+
+/** 把文献移入某个研究分类，或移回全局“未分类”；移动不会删除书目数据。 */
+export interface LiteratureSetProjectInput {
+  literatureId: string
+  /** null 明确表示当前记录位于“未分类”，undefined 仅供旧调用兼容。 */
+  sourceProjectId?: string | null
+  targetProjectId?: string
+}
+
+/** 从本机文献库永久删除一条记录；主进程仍会阻止删除正在被引用的文献。 */
+export interface LiteratureDeleteInput {
+  literatureId: string
+  /** null 明确表示当前记录位于“未分类”，undefined 仅供旧调用兼容。 */
+  sourceProjectId?: string | null
 }
 
 export type ProviderProtocol = 'openai-compatible' | 'anthropic'
@@ -329,6 +379,8 @@ export interface ManuscriptSection extends BaseEntity {
   status: 'pending' | 'generating' | 'draft' | 'verified' | 'error'
   wordCount: number
   version: number
+  /** 当前正文对应的历史版本；正文偏离快照时会清空。 */
+  activeGenerationVersionId?: string
   /** 最近一次模型生成所使用的提供商与模型，仅用于本机过程追溯。 */
   generationProviderId?: string
   generationModel?: string
@@ -345,6 +397,21 @@ export interface ManuscriptSection extends BaseEntity {
   derivedFromSectionId?: string
   /** 生成当前同步视图时对应的父章节版本，用于判断是否需要刷新。 */
   derivedFromVersion?: number
+}
+
+export interface ManuscriptSectionVersion extends BaseEntity {
+  projectId: string
+  sectionId: string
+  /** 面向用户的连续编号，从 1 开始。 */
+  number: number
+  source: 'generated' | 'saved' | 'migrated' | 'partial' | 'derived'
+  content: string
+  wordCount: number
+  status: 'draft' | 'verified' | 'error'
+  reasoningContent?: string
+  generationProviderId?: string
+  generationModel?: string
+  thinkingRequested?: boolean
 }
 
 export interface CitationEvidence extends BaseEntity {
@@ -470,6 +537,7 @@ export interface WorkspaceState {
   literature: LiteratureRecord[]
   outlines: Record<string, OutlineNode[]>
   sections: ManuscriptSection[]
+  sectionVersions: ManuscriptSectionVersion[]
   citations: CitationEvidence[]
   runs: AgentRun[]
   mcpServers: McpServerConfig[]
@@ -509,6 +577,11 @@ export interface SectionGenerateInput {
   sectionId: string
   providerId: string
   model: string
+}
+
+export interface SectionVersionSelectInput {
+  sectionId: string
+  versionId: string
 }
 
 export type SectionStreamEvent =

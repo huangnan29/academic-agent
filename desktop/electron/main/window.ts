@@ -27,6 +27,26 @@ export function createMainWindow(): BrowserWindow {
 
   window.once('ready-to-show', () => window.show())
 
+  // 语音输入只允许当前主窗口的本地渲染页请求音频；摄像头和子框架请求始终拒绝。
+  window.webContents.session.setPermissionCheckHandler((webContents, permission, _origin, details) => (
+    webContents?.id === window.webContents.id
+    && permission === 'media'
+    && (details.mediaType === 'audio' || details.mediaType === 'unknown')
+    && details.isMainFrame
+    && isTrustedRendererUrl(details.requestingUrl ?? window.webContents.getURL())
+  ))
+  window.webContents.session.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    const mediaTypes = 'mediaTypes' in details ? details.mediaTypes ?? [] : []
+    callback(
+      webContents.id === window.webContents.id
+      && permission === 'media'
+      && details.isMainFrame
+      && mediaTypes.includes('audio')
+      && !mediaTypes.includes('video')
+      && isTrustedRendererUrl(details.requestingUrl),
+    )
+  })
+
   // 应用内不允许任意页面覆盖当前工作区。
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) void shell.openExternal(url)
@@ -43,6 +63,19 @@ export function createMainWindow(): BrowserWindow {
   else void window.loadFile(join(currentDirectory, '../../dist/index.html'))
 
   return window
+}
+
+function isTrustedRendererUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    if (app.isPackaged) {
+      return url.protocol === 'file:' && decodeURIComponent(url.pathname).endsWith('/dist/index.html')
+    }
+    const configured = process.env.ELECTRON_RENDERER_URL
+    return Boolean(configured && url.origin === new URL(configured).origin)
+  } catch {
+    return false
+  }
 }
 
 /**

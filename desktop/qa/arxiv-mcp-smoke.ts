@@ -53,6 +53,21 @@ async function main(): Promise<void> {
     const paper = parsed.papers?.[0]
     if (!paper?.id || !paper.title) throw new Error('arXiv MCP 返回结果缺少论文 ID 或标题。')
 
+    const educationResult = await manager.callTool(seeded.id, DEFAULT_ARXIV_MCP_TOOL_NAME, {
+      query: '"generative artificial intelligence" AND education',
+      max_results: 5,
+    })
+    const educationText = educationResult.content.find(
+      (block): block is { type: 'text'; text: string } =>
+        block.type === 'text' && typeof block.text === 'string',
+    )
+    if (!educationText) throw new Error('生成式人工智能教育主题没有返回文本结果。')
+    const educationParsed = JSON.parse(educationText.text) as {
+      total_results?: number
+      papers?: Array<{ id?: string; title?: string }>
+    }
+    if (!educationParsed.papers?.length) throw new Error('英文教育主题查询仍然返回 0 条。')
+
     console.log(JSON.stringify({
       ok: true,
       serverId: seeded.id,
@@ -63,6 +78,11 @@ async function main(): Promise<void> {
         id: paper.id,
         title: paper.title,
         published: paper.published,
+      },
+      educationTopic: {
+        totalResults: educationParsed.total_results,
+        returned: educationParsed.papers.length,
+        first: educationParsed.papers[0],
       },
     }, null, 2))
   } finally {

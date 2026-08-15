@@ -290,7 +290,7 @@
 - 修复：加号浮层真实连接文件/文件夹、对话目标和计划模式；模型入口移动到右下并直接显示当前模型，发送按钮改为 Codex 式圆形上箭头。目标与计划模式写入当前对话并进入模型上下文，不是视觉占位。
 - 初始 P1：右侧研究工作台宽度固定，无法按内容自由调整。
 - 修复：右栏左缘增加拖动热区，支持鼠标、左右方向键和双击恢复 380px，范围 320–620px，并将宽度写入工作区设置。
-- 最终同画布复验没有发现仍需修复的 P0/P1/P2。Codex 参考中的语音、推理强度和“附加 Codex Agent”没有在本应用中伪造；当前产品没有对应的语音或模型推理参数契约，应用内 Skills 已有独立真实入口。
+- 最终同画布复验没有发现仍需修复的 P0/P1/P2。当轮没有伪造 Codex 参考中的语音、推理强度和“附加 Codex Agent”；语音输入已在后续第 31 节接入真实权限与识别链路，应用内 Skills 继续使用独立真实入口。
 
 ### 14.3 原生功能、持久化与安全证据
 
@@ -399,5 +399,71 @@
 - 真实链路：在隔离的打包 `.app` 中发送 `/search_papers ti:\"retrieval augmented generation\"`，arXiv MCP 成功返回 5 篇论文，过程页生成已完成的 `MCP · search_papers` 步骤，DeepSeek 基于真实结果完成回复。
 - 审计证据：运行步骤保存 `mcp-tool` 证据、结果 SHA-256 `f341d16049a6d3f3c38a955306bbaa004d5282ce696afe1b3d3536176758c250`、10,717 字符有界结果且 `truncated=false`。验收使用隔离数据目录，未污染用户正式项目。
 - 安全边界：外部返回以 BEGIN/END 不可信 JSON 区块注入；普通自然语言仍不会自动调用 MCP，只有菜单显式选择或 `/工具名` 命令才执行。
+
+## 25. 章节历史版本与重新生成原生验收（2026-08-13）
+
+- 在隔离的打包 `.app` 中连续保存同一章节两次，工作区真实形成第 2、3 版；顶部显示“第 3 版 · 保存时间”和无需确认的“重新生成”。
+- 版本菜单共显示 3 条记录，每条均包含连续编号、生成/保存状态和有效 `<time dateTime>`；当前版使用中性选中背景与绿色勾选，不使用突兀品牌色高亮。
+- 点击第 2 版后，主进程 `activeGenerationVersionId` 切换到对应版本，正文出现第 2 版唯一标记且不再包含第 3 版标记；刷新与项目上下文将继续读取该当前稿。
+- 退出隔离应用并使用同一数据目录重新启动后，第 2 版指针、正文唯一标记、草稿状态和字数均恢复，版本选择不是临时界面状态。
+- 菜单、正文切换、Toast、输入框与三栏布局同时可见；菜单未遮挡重新生成按钮或正文主要阅读区域，原生运行时错误为 0。
+- 仓储回归覆盖旧章节迁移、重新生成不清旧稿、重复生成拒绝、新版本提交、旧版切回、手工保存新版本与项目删除级联；章节同步和项目上下文回归继续通过。
+- 最终打包副本证据：`output/native-section-version-qa-final/section-version-menu.png`、`output/native-section-version-qa-final/section-version-restored-body.png`。
+- 边界：本轮用本机隔离副本和手工保存构造版本，没有再次调用真实模型；模型重新生成使用既有流式链路，版本提交与错误分支由仓储冒烟验证。
+
+## 26. arXiv 中文检索与本轮工具结果原生验收（2026-08-13）
+
+- 在隔离的最终打包 `.app` 中发送中文 Slash 请求“`/paper_search 帮我搜索5篇与此标题强相关的内容`”；应用结合当前研究背景生成英文 arXiv 布尔检索式，没有把中文自然语言指令原样交给上游。
+- 实际执行参数为 `("generative AI" OR "generative artificial intelligence") AND "higher education" AND "mechanism" AND "teaching"`、`max_results=5`，真实返回 3 篇论文，运行步骤为已完成的 `MCP · search_papers`。
+- DeepSeek 明确说明本轮工具已由主进程真实执行，逐篇列出实际返回论文标题和 arXiv ID；不再出现“没有本轮真实返回”“请改用英文后再试”等错误判断。
+- 工具步骤证据保存实际英文参数、3 篇结果、SHA-256 `dc78ebb0b47cc0cdca0b49eac9d26e64875396257c68a8b818b5407245ef064b`，`truncated=false`；运行时错误为 0。
+- 证据：`output/native-arxiv-chinese-query-final/arxiv-chinese-query-completed.png`。最终 `/Applications/学术 Agent.app` 与打包产物的 `app.asar` SHA-256 均为 `f59e66132dd8c50e1f6a312c0b867bbbad3f465e7aa2ff40c728291c6e716ffb`，安装副本已经重新启动。
+- 边界：中文意图会转换为英文查询并最多自动放宽 3 次，但 arXiv 的学科覆盖和命中数量仍由真实上游决定；普通自然语言不会在未显式选择工具时自动调用 MCP。
+
+## 27. 消息内添加文献与右栏即时显示验收（2026-08-14）
+
+- 视觉目标为用户截图中的 GPT 式文字超链接：最终实现只有标题、轻分隔线和下划线文字操作，没有卡片底色、胶囊、阴影或按钮圆角；原生计算样式确认操作圆角数量为 0。
+- 真实 arXiv MCP 本轮返回 2 篇论文，助手消息下方显示“本轮检索论文 / 全部添加”，每篇分别显示“添加到文献栏”；标题、作者、年份与 arXiv 来源保持紧凑层级。
+- 点击第一篇后，消息原位变为绿色“已添加”，第二篇继续保留文字链接；右侧文献标签自动打开，文献总数从 2 增至 3，并显示新增真实论文标题。
+- 主进程仓储冒烟确认：重复添加返回同一记录、伪造候选 ID 被拒绝、批量添加和重启持久化通过；跨项目已纳入文献不再进入当前项目右栏或误标当前消息。
+- 最终打包副本证据：`output/native-message-literature-add-final/message-literature-actions-final.png`；真实工具/模型执行截图：`output/native-message-literature-add/arxiv-chinese-query-completed.png`。原生运行时错误为 0。
+- 最终 `/Applications/学术 Agent.app` 与打包产物的 `app.asar` SHA-256 均为 `54d0e485738bfb20f124a657173702b0a915fd33497319c760b1f3e9681e4b64`，安装副本已使用新进程重新启动。
+
+## 28. 正式工作区版本一致性与历史文献回填验收（2026-08-14）
+
+- 此前第 27 节证明了隔离工作区中“本轮 MCP 返回”的添加链路，但不能证明用户正式工作区中“沿用此前检索”的旧回复已经显示操作；本节补齐该证据边界。
+- 正式工作区“绪论”当前 `section.version=5`、活动历史快照 `number=1`。最终安装版右侧大纲显示“草稿 · 2,292 字 · 第 1 版”，与中央文稿顶部“第 1 版”一致，没有再显示错误的第 5 版。
+- 正式工作区两条旧回复均从同项目、成功且未截断的 MCP 审计证据中精确回填 5 个 arXiv ID；正文中的占位符“arXiv编号”没有被迁移。
+- 最终安装版在用户截图对应回复下真实显示 5 条无圆角“添加到文献栏”和“全部添加”；原生计算样式确认圆角操作数量为 0。
+- 在正式数据副本的隔离目录点击“全部添加”后，5 条操作全部变为“已添加”，右侧文献栏即时从 2 条增加到 7 条并展示新增论文；正式工作区未因点击验收被写入这些记录。
+- 证据：`output/native-outline-version-consistency-final/outline-version-consistency-final.png`、`output/native-message-literature-backfill-final/message-literature-actions-final.png`、`output/native-message-literature-backfill-add-final/message-literature-actions-final.png`。
+- 类型检查、消息文献仓储回归、章节版本回归和生产构建均通过；最终安装副本与构建产物 `app.asar` SHA-256 均为 `27eca4f28b35942f757ce23eb2ee25a75d7049510ae62c188d0f78aa35428060`，Dock 路径应用已重新启动。
+
+## 29. 文献项目分类与可用性边界原生验收（2026-08-14）
+
+- 最终安装版文献库提供“全部文献”和 2 个现有研究项目分类；项目视图只显示本项目记录，全部视图的每张卡片明确展示所属项目或“未分类”。
+- 在原生 Electron 中选取真实项目文献，完整执行“纳入项目 → 取消纳入 → 移出项目”；移出后记录从项目分类消失，并在“全部文献”中以“未分类”保留，没有删除文献数据。
+- 详情页显示文献真实所属项目，并把抽象的“无法判断”改为明确证据边界：当前只核验来源元数据、摘要、原始来源链接和引用映射；缺少可核对全文时不会自动声称文献支持正文主张。
+- 项目分类、状态分段、搜索来源和项目归属标签在 1480×940 原生窗口内无重叠；右侧详情、卡片操作和搜索区保持现有紧凑设计语言。
+- 原生验收运行时错误和警告均为 0；证据：`output/native-literature-project-final/literature-current-project.png`、`output/native-literature-project-final/literature-unclassified-detail.png`。
+- 用户截图与最终界面已并排检查：`output/native-literature-project-final/reference-vs-final.png`。最终安装副本与构建产物 `app.asar` SHA-256 均为 `494b84b20b6639901e3488ff17a255c4f44f95eb99dfe5f409f70d888a1b092f`。
+
+## 30. 文献永久删除原生验收（2026-08-14）
+
+- 文献卡片同时显示“移出项目”和红色文字“删除”：前者保留全局记录，后者进入不可撤销确认，两种语义清晰分离。
+- 演示文献可以打开真实确认框；确认框明确展示将删除的本机数据、不会影响的在线论文和导出文件，以及被正文引用时会阻止删除的边界。
+- 在隔离的最终打包 `.app` 中永久删除演示文献“演示：生成式人工智能与高等教育研究综述”，删除后工作区和“全部文献”页面均不再包含该记录。
+- 确认框、卡片操作、右侧详情和背景遮罩在 1480×940 原生窗口内无重叠或裁切；运行时错误为 0。
+- 证据：`output/native-literature-delete-final/literature-delete-confirm.png`、`output/native-literature-delete-final/literature-demo-deleted.png`。最终安装副本与构建产物 `app.asar` SHA-256 均为 `ec5ffa992bc1e80352ca45029c67da73f81f432f75e0611be616c319269d4d19`。
+
+## 31. 语音输入原生验收（2026-08-15）
+
+- 最终打包 Electron 输入框在模型选择器与发送按钮之间显示 32px 中性圆形麦克风按钮；空闲态可访问名称为“开始语音输入”，没有使用品牌色抢占输入框焦点。
+- “设置 → 语音输入”真实显示麦克风权限、系统语音识别、简体中文 `zh-CN`、请求权限、重新检查和打开系统设置；1480×940 原生窗口内没有重叠、裁切或竖排文案。
+- 主进程桥接返回 macOS 真实状态 `microphone=not-determined`，打包渲染环境确认 `webkitSpeechRecognition` 为可用函数；没有把尚未询问冒充成已授权。
+- Info.plist 包含中文 `NSMicrophoneUsageDescription` 与 `NSSpeechRecognitionUsageDescription`；媒体权限只允许可信主窗口音频请求，并拒绝摄像头和非可信页面。
+- 证据：`desktop/output/voice-input/voice-input-composer.png`、`desktop/output/voice-input/voice-input-settings.png`、`desktop/output/voice-input/summary.json`。
+- 类型检查、生产构建和 `.app` 打包通过；最终 `/Applications/学术 Agent.app` 与构建产物 `app.asar` SHA-256 均为 `6fe0e7ac7c6e5f0e105c26faa4a602926e980d84f4f403f8d2701583f8ae8b5f`，安装副本已重新启动并启用 renderer 沙箱。
+- 边界：本机尚未在 macOS 弹窗中授权麦克风，因此真实说话转写需要用户首次点击后完成授权再人工确认；本轮已验证权限请求入口、真实状态、识别构造器、界面和打包权限声明，不把未进行的口述测试写成通过。
 
 final result: passed

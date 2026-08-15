@@ -37,6 +37,7 @@ export class PaperCoordinator {
     if (!project) throw new Error('项目不存在。')
     const profile = this.repository.getProvider(input.providerId)
     if (!profile || !profile.enabled) throw new Error('所选模型服务未启用。')
+    await this.repository.promoteProjectForProvider(input.projectId, profile.id)
     const adapter = createProviderAdapter(
       profile,
       this.configuration.providerSecret(input.providerId),
@@ -112,6 +113,7 @@ export class PaperCoordinator {
     if (!project || !section) throw new Error('项目或论文章节不存在。')
     const profile = this.repository.getProvider(input.providerId)
     if (!profile || !profile.enabled) throw new Error('所选模型服务未启用。')
+    await this.repository.promoteProjectForProvider(input.projectId, profile.id)
     const adapter = createProviderAdapter(
       profile,
       this.configuration.providerSecret(input.providerId),
@@ -124,31 +126,28 @@ export class PaperCoordinator {
       ['检查引用与篇幅', '等待章节生成完成', 'pending'],
     ])
     const thinkingRequested = usesExplicitDeepSeekThinking(profile, input.model)
-    await this.repository.saveRun(run)
-    await this.repository.updateSection(input.sectionId, {
-      status: 'generating',
-      content: '',
-      wordCount: 0,
-      reasoningContent: undefined,
-      generationError: undefined,
+    const generation = await this.repository.beginSectionGeneration(input.sectionId, {
       generationProviderId: profile.id,
       generationModel: input.model,
-      thinkingRequested,
-    })
-    this.sendSection(sender, {
-      runId: run.id,
-      sectionId: input.sectionId,
-      type: 'started',
-      providerId: profile.id,
-      providerName: profile.name,
-      model: input.model,
       thinkingRequested,
     })
     let content = ''
     let reasoningContent = ''
     let savedSection: ManuscriptSection | undefined
+    let runSaved = false
 
     try {
+      await this.repository.saveRun(run)
+      runSaved = true
+      this.sendSection(sender, {
+        runId: run.id,
+        sectionId: input.sectionId,
+        type: 'started',
+        providerId: profile.id,
+        providerName: profile.name,
+        model: input.model,
+        thinkingRequested,
+      })
       for await (const event of adapter.streamChat(messages, input.model)) {
         if (event.type === 'reasoning-delta') {
           reasoningContent += event.delta
@@ -166,14 +165,19 @@ export class PaperCoordinator {
           this.sendSection(sender, { runId: run.id, sectionId: input.sectionId, type: 'text-delta', delta: event.delta })
         }
       }
-      savedSection = await this.repository.saveSection(input.sectionId, content)
-      savedSection = await this.repository.updateSection(input.sectionId, {
-        reasoningContent: reasoningContent || undefined,
-        generationProviderId: profile.id,
-        generationModel: input.model,
-        thinkingRequested,
-        generationError: undefined,
-      })
+      savedSection = await this.repository.commitSectionGeneration(
+        input.sectionId,
+        generation.baseVersion,
+        content,
+        {
+          source: 'generated',
+          reasoningContent: reasoningContent || undefined,
+          generationProviderId: profile.id,
+          generationModel: input.model,
+          thinkingRequested,
+          generationError: undefined,
+        },
+      )
 
       const included = state.literature.filter(
         (item) => item.projectId === input.projectId && item.included && item.origin !== 'demo',
@@ -237,26 +241,48 @@ export class PaperCoordinator {
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : '章节生成失败。'
-      if (!savedSection && content) {
-        savedSection = await this.repository.saveSection(input.sectionId, content)
+      let failedSection = this.repository.snapshot().sections.find((item) => item.id === input.sectionId) ?? generation.section
+      try {
+        failedSection = savedSection
+          ? await this.repository.updateSection(input.sectionId, {
+              status: 'error',
+              generationError: message,
+            })
+          : content
+          ? await this.repository.commitSectionGeneration(
+              input.sectionId,
+              generation.baseVersion,
+              content,
+              {
+                source: 'partial',
+                reasoningContent: reasoningContent || undefined,
+                generationProviderId: profile.id,
+                generationModel: input.model,
+                thinkingRequested,
+                generationError: message,
+              },
+            )
+          : await this.repository.failSectionGeneration(input.sectionId, generation.baseVersion, {
+              reasoningContent: reasoningContent || undefined,
+              generationProviderId: profile.id,
+              generationModel: input.model,
+              thinkingRequested,
+              generationError: message,
+            })
+      } catch {
+        failedSection = this.repository.snapshot().sections.find((item) => item.id === input.sectionId) ?? failedSection
       }
-      const failedSection = await this.repository.updateSection(input.sectionId, {
-        status: 'error',
-        reasoningContent: reasoningContent || undefined,
-        generationProviderId: profile.id,
-        generationModel: input.model,
-        thinkingRequested,
-        generationError: message,
-      })
-      await this.repository.updateRun(run.id, {
-        status: 'error',
-        error: message,
-        steps: run.steps.map((step) =>
-          step.status === 'running'
-            ? { ...step, detail: message, status: 'error' as const, completedAt: now() }
-            : step,
-        ),
-      })
+      if (runSaved) {
+        await this.repository.updateRun(run.id, {
+          status: 'error',
+          error: message,
+          steps: run.steps.map((step) =>
+            step.status === 'running'
+              ? { ...step, detail: message, status: 'error' as const, completedAt: now() }
+              : step,
+          ),
+        })
+      }
       this.sendSection(sender, {
         runId: run.id,
         sectionId: input.sectionId,

@@ -7,6 +7,7 @@ import type {
   ChatStartInput,
   ChatStreamEvent,
   McpToolCallResult,
+  MessageLiteratureCandidate,
 } from '../../shared/contracts'
 import { IPC } from '../../shared/ipc'
 import { createProviderAdapter } from '../services/providers'
@@ -19,6 +20,10 @@ import {
 import { WorkspaceRepository } from '../services/storage/workspaceRepository'
 import { ConfigurationService } from './configuration'
 import { toUserMessage } from './errors'
+import {
+  extractMcpLiteratureCandidates,
+  resolveHistoricalMessageLiteratureCandidates,
+} from './mcpLiterature'
 import { SystemPermissionService } from './systemPermissions'
 
 const now = () => new Date().toISOString()
@@ -78,6 +83,7 @@ export class ChatCoordinator {
     await this.assertCanStart(input)
     const profile = this.repository.getProvider(input.providerId)
     if (!profile) throw new Error('所选模型服务不存在。')
+    await this.repository.promoteProjectForProvider(input.projectId, profile.id)
 
     const runId = randomUUID()
     const timestamp = now()
@@ -147,7 +153,7 @@ export class ChatCoordinator {
     for (const toolStep of toolSteps) this.send(sender, { runId, type: 'step', step: toolStep })
     this.send(sender, { runId, type: 'step', step })
 
-    void this.consumeStream(input, assistantMessage, step, toolSteps, mcpPlans, controller, sender)
+    void this.consumeStream(input, userMessage.id, assistantMessage, step, toolSteps, mcpPlans, controller, sender)
     return { runId }
   }
 
@@ -162,6 +168,7 @@ export class ChatCoordinator {
 
   private async consumeStream(
     input: ChatStartInput,
+    currentUserMessageId: string,
     assistantMessage: ChatMessage,
     step: AgentStep,
     toolSteps: AgentStep[],
@@ -173,6 +180,7 @@ export class ChatCoordinator {
     if (!runId) return
     let content = ''
     let reasoningContent = ''
+    const literatureCandidates: MessageLiteratureCandidate[] = []
     const resolvedMcpTools: NonNullable<ResolvedChatStartInput['resolvedMcpTools']> = []
     let activeToolIndex = -1
 
@@ -198,19 +206,52 @@ export class ChatCoordinator {
           result,
         }
         resolvedMcpTools.push(execution)
+        const auditEvidence = createMcpAuditEvidence(execution)
+        for (const candidate of extractMcpLiteratureCandidates(result)) {
+          if (literatureCandidates.length >= 50) break
+          const duplicated = literatureCandidates.some((item) => (
+            (item.doi && candidate.doi && item.doi === candidate.doi)
+            || (item.title === candidate.title && item.year === candidate.year)
+          ))
+          if (duplicated) continue
+          literatureCandidates.push({
+            id: randomUUID(),
+            ...candidate,
+            provenance: {
+              runId,
+              stepId: toolSteps[index].id,
+              serverId: auditEvidence.serverId,
+              toolName: auditEvidence.toolName,
+              resultSha256: auditEvidence.resultSha256,
+            },
+            source: 'mcp',
+          })
+        }
+        if (literatureCandidates.length > 0) {
+          // 工具完成后立即保存候选；即使后续模型失败，真实检索结果仍可由用户加入文献栏。
+          await this.repository.updateMessage(assistantMessage.id, {
+            literatureCandidates: [...literatureCandidates],
+          })
+        }
         toolSteps[index] = {
           ...toolSteps[index],
           detail: summarizeMcpExecution(execution),
           status: 'completed',
           completedAt: now(),
-          evidence: createMcpAuditEvidence(execution),
+          evidence: auditEvidence,
         }
         await this.repository.updateRun(runId, { steps: [...toolSteps, step] })
         this.send(sender, { runId, type: 'step', step: toolSteps[index] })
       }
 
       activeToolIndex = -1
-      const resolvedInput: ResolvedChatStartInput = { ...input, resolvedMcpTools }
+      const resolvedInput: ResolvedChatStartInput = {
+        ...input,
+        // 用户消息仍保存原始别名；只在模型输入中规范为真实工具名，避免模型误判“工具不存在”。
+        content: normalizeResolvedMcpAlias(input.content, resolvedMcpTools),
+        resolvedMcpTools,
+        currentUserMessageId,
+      }
       await this.assertCanStart(resolvedInput)
       const messages = buildChatMessages(this.repository.snapshot(), resolvedInput)
       const runningStep: AgentStep = { ...step, status: 'running', startedAt: now() }
@@ -241,9 +282,15 @@ export class ChatCoordinator {
         }
       }
 
+      const historicalCandidates = resolveHistoricalMessageLiteratureCandidates(
+        this.repository.snapshot(),
+        { ...assistantMessage, content },
+      )
+      const completedCandidates = mergeLiteratureCandidates(literatureCandidates, historicalCandidates)
       const completed = await this.repository.updateMessage(assistantMessage.id, {
         content,
         reasoningContent: reasoningContent || undefined,
+        literatureCandidates: completedCandidates.length > 0 ? completedCandidates : undefined,
         status: 'completed',
       })
       await this.repository.updateRun(runId, {
@@ -263,11 +310,13 @@ export class ChatCoordinator {
     } catch (error) {
       if (controller.signal.aborted) {
         if (activeToolIndex >= 0) {
+          const activePlan = mcpPlans[activeToolIndex]
           toolSteps[activeToolIndex] = {
             ...toolSteps[activeToolIndex],
             detail: '用户已停止本次 MCP 调用',
             status: 'stopped',
             completedAt: now(),
+            evidence: activePlan ? createMcpFailureAuditEvidence(activePlan, '用户已停止本次 MCP 调用') : undefined,
           }
         }
         const cancelled = await this.repository.updateMessage(assistantMessage.id, {
@@ -286,11 +335,13 @@ export class ChatCoordinator {
       } else {
         const message = toUserMessage(error, '模型生成失败，请检查服务配置后重试。')
         if (activeToolIndex >= 0) {
+          const activePlan = mcpPlans[activeToolIndex]
           toolSteps[activeToolIndex] = {
             ...toolSteps[activeToolIndex],
             detail: message,
             status: 'error',
             completedAt: now(),
+            evidence: activePlan ? createMcpFailureAuditEvidence(activePlan, message) : undefined,
           }
         }
         await this.repository.updateMessage(assistantMessage.id, {
@@ -317,6 +368,21 @@ export class ChatCoordinator {
   private send(sender: WebContents, event: ChatStreamEvent): void {
     if (!sender.isDestroyed()) sender.send(IPC.chatEvent, event)
   }
+}
+
+function mergeLiteratureCandidates(
+  current: MessageLiteratureCandidate[],
+  historical: MessageLiteratureCandidate[],
+): MessageLiteratureCandidate[] {
+  const merged = [...current]
+  for (const candidate of historical) {
+    const duplicated = merged.some((item) => (
+      (item.doi && candidate.doi && item.doi === candidate.doi)
+      || (item.title === candidate.title && item.year === candidate.year)
+    ))
+    if (!duplicated) merged.push(candidate)
+  }
+  return merged.slice(0, 50)
 }
 
 function summarizeMcpExecution(execution: NonNullable<ResolvedChatStartInput['resolvedMcpTools']>[number]): string {
@@ -362,12 +428,39 @@ function createMcpAuditEvidence(
   }
 }
 
+function createMcpFailureAuditEvidence(
+  plan: ChatMcpToolPlan,
+  errorMessage: string,
+): NonNullable<AgentStep['evidence']> {
+  const safeError = sanitizeMcpText(errorMessage).slice(0, 2_000)
+  const result = stringifySanitizedMcpData({ error: safeError })
+  return {
+    kind: 'mcp-tool',
+    serverId: plan.serverId,
+    toolName: plan.toolName,
+    argumentsJson: redactedJson(plan.arguments).slice(0, 8_000),
+    resultJson: result,
+    resultSha256: createHash('sha256').update(result).digest('hex'),
+    truncated: false,
+  }
+}
+
 function redactedJson(value: unknown): string {
   try {
     return stringifySanitizedMcpData(value)
   } catch {
     return '{}'
   }
+}
+
+function normalizeResolvedMcpAlias(
+  content: string,
+  executions: NonNullable<ResolvedChatStartInput['resolvedMcpTools']>,
+): string {
+  if (!executions.some((item) => item.serverId === 'builtin-arxiv-mcp' && item.toolName === 'search_papers')) {
+    return content
+  }
+  return content.replace(/^\s*\/paper_search\b/iu, '/search_papers')
 }
 
 function validateContextReferences(
