@@ -53,6 +53,7 @@ import {
 } from './schemas'
 import { isAllowedExternalUrl } from './window'
 import { SystemPermissionService } from './systemPermissions'
+import { VoiceInputService } from './voiceInput'
 import { executeArxivSearchWithRetry, planArxivSearchQueries } from './arxivSearch'
 import { extractMcpLiteratureCandidates } from './mcpLiterature'
 
@@ -354,6 +355,7 @@ export interface IpcDependencies {
   exporter: ExportCoordinator
   literature: LiteratureService
   systemPermissions: SystemPermissionService
+  voiceInput: VoiceInputService
   applyAppearance(appearance: AppearanceSettings): void | Promise<void>
   testMcp(server: McpServerConfig): Promise<McpTestResult>
   callMcpTool(
@@ -548,6 +550,23 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
   handle(IPC.systemPermissionsOpenSettings, async (_event, kind: unknown) => {
     if (!isSystemPermissionKind(kind)) throw new Error('系统权限类型无效。')
     await dependencies.systemPermissions.openSettings(kind)
+  })
+
+  handle(IPC.voiceInputStatus, () => dependencies.voiceInput.status())
+
+  handle(IPC.voiceInputStart, async (event) => {
+    const permissions = await dependencies.systemPermissions.snapshot()
+    if (permissions.microphone !== 'granted') {
+      throw new Error('macOS 尚未允许学术 Agent 使用麦克风，请先完成系统授权。')
+    }
+    return dependencies.voiceInput.start(event.sender)
+  })
+
+  handle(IPC.voiceInputStop, async (_event, sessionId: unknown) => {
+    if (typeof sessionId !== 'string' || sessionId.length < 1 || sessionId.length > 100) {
+      throw new Error('语音识别会话无效。')
+    }
+    await dependencies.voiceInput.stop(sessionId)
   })
 
   handle(

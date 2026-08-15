@@ -183,9 +183,13 @@
 - 主进程接入真实 macOS 麦克风状态读取与系统授权请求；权限未询问时由系统弹窗决定，拒绝或受限时跳转到“隐私与安全性 → 麦克风”，渲染层不能冒充授权成功。
 - 打包应用补齐麦克风与语音识别用途说明，并把媒体权限限制在可信主窗口的音频请求；摄像头、子框架和非应用页面请求均拒绝。
 - 语音设置页现可查看真实麦克风状态、识别能力和 `zh-CN` 默认语言，并提供请求权限、重新检查和打开系统设置。
-- 切换对话、发送消息、开始生成或卸载输入框时会停止当前识别；权限拒绝、无麦克风、无语音、网络或识别服务错误均显示中文提示并保留已有文字。
-- 类型检查、生产构建、Apple Silicon `.app` 打包和原生 Electron 视觉/桥接验收通过；最终 `/Applications/学术 Agent.app` 已更新并重新启动，安装副本与构建产物 `app.asar` SHA-256 均为 `6fe0e7ac7c6e5f0e105c26faa4a602926e980d84f4f403f8d2701583f8ae8b5f`。
-- 本机当前麦克风状态为“尚未询问”，未代替用户点击系统授权；首次点击输入框麦克风后仍需用户在 macOS 弹窗中选择允许。语音识别由 Electron/Chromium Web Speech Recognition 提供，不承诺离线转写。
+- 首轮实现使用 Chromium Web Speech，在 Electron 中真实触发 `network` 错误；该方案已判定不可用并被完全移除，不能作为桌面语音能力。
+- 修复后随应用编译并打包 macOS Speech + AVFAudio 原生辅助程序，通过主进程窄化 IPC 返回实时中间结果；系统支持时设置 `requiresOnDeviceRecognition`，不再依赖 Chromium 的网页识别服务。
+- 设置页读取原生组件的真实可用性、Speech 授权和本机识别能力。本机检查结果为 `zh-CN available=true / onDevice=true / authorization=not-determined`。
+- 切换对话、发送消息、开始生成或卸载输入框时会停止当前识别；权限拒绝、无麦克风和识别服务错误均显示中文提示并保留已有文字。
+- 类型检查、生产构建、Apple Silicon `.app` 打包、原生辅助程序状态读取与安装资源检查通过；最终 `/Applications/学术 Agent.app` 已更新并重新启动，安装副本与构建产物 `app.asar` SHA-256 均为 `503e9d755ed7af3ed64a60be74e637abbc85559f0f7864af4e53c8f3f7868a3d`。
+- 隔离安装版通过真实 preload/IPC 读取原生状态，桥接 `start/stop/onEvent` 完整；证据保存在 `output/native-voice-status-final/`。
+- 本机 Speech 授权当前仍为“尚未询问”；首次点击更新后应用的麦克风按钮时，用户仍需在 macOS 系统弹窗中选择允许。真实口述转写留待用户完成系统授权后确认。
 
 ## 当前架构
 

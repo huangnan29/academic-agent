@@ -101,6 +101,7 @@ import type {
   SkillInput,
   SystemPermissionKind,
   SystemPermissionSnapshot,
+  VoiceRecognitionStatus,
   WorkspaceState,
 } from '../shared/contracts'
 import { DEFAULT_APPEARANCE_SETTINGS, SKILL_LIMITS } from '../shared/contracts'
@@ -2024,65 +2025,6 @@ function SystemPermissionDialog({
   )
 }
 
-type SpeechRecognitionResultLike = {
-  isFinal: boolean
-  [index: number]: { transcript: string }
-}
-
-type SpeechRecognitionEventLike = Event & {
-  resultIndex: number
-  results: {
-    length: number
-    [index: number]: SpeechRecognitionResultLike
-  }
-}
-
-type SpeechRecognitionErrorEventLike = Event & {
-  error: string
-}
-
-type SpeechRecognitionLike = {
-  lang: string
-  continuous: boolean
-  interimResults: boolean
-  maxAlternatives: number
-  onresult: ((event: SpeechRecognitionEventLike) => void) | null
-  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null
-  onend: (() => void) | null
-  start: () => void
-  stop: () => void
-  abort: () => void
-}
-
-type SpeechRecognitionConstructor = new () => SpeechRecognitionLike
-
-function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | undefined {
-  if (typeof window === 'undefined') return undefined
-  const speechWindow = window as Window & {
-    SpeechRecognition?: SpeechRecognitionConstructor
-    webkitSpeechRecognition?: SpeechRecognitionConstructor
-  }
-  return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition
-}
-
-function speechErrorMessage(error: string): string {
-  switch (error) {
-    case 'not-allowed':
-    case 'service-not-allowed':
-      return '麦克风或语音识别权限未允许，请在系统设置中授权后重试。'
-    case 'audio-capture':
-      return '未检测到可用麦克风，请检查麦克风连接和系统输入设备。'
-    case 'no-speech':
-      return '没有听到清晰语音，请靠近麦克风后重试。'
-    case 'network':
-      return '语音识别网络服务不可用，请检查网络后重试。'
-    case 'aborted':
-      return '语音识别已停止。'
-    default:
-      return `语音识别失败（${error || '未知错误'}），请重试。`
-  }
-}
-
 function Composer({
   providers,
   activeProviderId,
@@ -2138,11 +2080,10 @@ function Composer({
   const composingRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const addMenuRef = useRef<HTMLDivElement>(null)
-  const speechRecognitionRef = useRef<SpeechRecognitionLike | undefined>(undefined)
   const speechSessionRef = useRef<{
+    sessionId?: string
     baseValue: string
     insertionPoint: number
-    segments: Array<{ text: string; isFinal: boolean }>
   } | undefined>(undefined)
   const interactionLocked = running || submitting
   const accessMode: ConversationAccessMode = conversation?.accessMode === 'full' ? 'full' : 'ask'
@@ -2255,20 +2196,10 @@ function Composer({
   const canSend = Boolean((value.trim() || zeroArgumentToolReference) && activeProviderId && activeModel && !interactionLocked)
 
   const stopSpeech = () => {
-    const recognition = speechRecognitionRef.current
-    speechRecognitionRef.current = undefined
+    const sessionId = speechSessionRef.current?.sessionId
     speechSessionRef.current = undefined
     setSpeechActive(false)
-    if (!recognition) return
-    try {
-      recognition.stop()
-    } catch {
-      try {
-        recognition.abort()
-      } catch {
-        // 识别器已经结束时，浏览器可能拒绝重复停止；保留已有文字即可。
-      }
-    }
+    if (sessionId) void paperAgent.voice.stop(sessionId).catch(() => undefined)
   }
 
   const startSpeech = async () => {
@@ -2289,65 +2220,23 @@ function Composer({
         return
       }
 
-      const constructor = getSpeechRecognitionConstructor()
-      if (!constructor) {
-        onToast('当前应用环境不支持语音识别，请使用支持 Web Speech Recognition 的桌面版本。', 'error')
-        return
-      }
-
       const textarea = textareaRef.current
       const insertionPoint = textarea?.selectionStart ?? cursorPosition
-      const recognition = new constructor()
-      const session = {
+      const session: NonNullable<typeof speechSessionRef.current> = {
+        sessionId: undefined,
         baseValue: value,
         insertionPoint: Math.max(0, Math.min(insertionPoint, value.length)),
-        segments: [] as Array<{ text: string; isFinal: boolean }>,
       }
       speechSessionRef.current = session
-      speechRecognitionRef.current = recognition
-      recognition.lang = 'zh-CN'
-      recognition.continuous = true
-      recognition.interimResults = true
-      recognition.maxAlternatives = 1
-      recognition.onresult = (event) => {
-        const currentSession = speechSessionRef.current
-        if (!currentSession || speechRecognitionRef.current !== recognition) return
-        for (let index = event.resultIndex; index < event.results.length; index += 1) {
-          const result = event.results[index]
-          currentSession.segments[index] = {
-            text: result[0]?.transcript ?? '',
-            isFinal: result.isFinal,
-          }
-        }
-        currentSession.segments.length = event.results.length
-        const transcript = currentSession.segments.map((segment) => segment.text).join('')
-        const nextValue = `${currentSession.baseValue.slice(0, currentSession.insertionPoint)}${transcript}${currentSession.baseValue.slice(currentSession.insertionPoint)}`
-        const nextCursor = currentSession.insertionPoint + transcript.length
-        setValue(nextValue)
-        setCursorPosition(nextCursor)
-        requestAnimationFrame(() => {
-          if (document.activeElement !== textareaRef.current) return
-          textareaRef.current?.setSelectionRange(nextCursor, nextCursor)
-        })
+      const started = await paperAgent.voice.start()
+      if (speechSessionRef.current !== session) {
+        await paperAgent.voice.stop(started.sessionId)
+        return
       }
-      recognition.onerror = (event) => {
-        if (speechRecognitionRef.current !== recognition) return
-        speechRecognitionRef.current = undefined
-        speechSessionRef.current = undefined
-        setSpeechActive(false)
-        if (event.error !== 'aborted') onToast(speechErrorMessage(event.error), 'error')
-      }
-      recognition.onend = () => {
-        if (speechRecognitionRef.current !== recognition) return
-        speechRecognitionRef.current = undefined
-        speechSessionRef.current = undefined
-        setSpeechActive(false)
-      }
-      recognition.start()
+      session.sessionId = started.sessionId
       setSpeechActive(true)
       requestAnimationFrame(() => textareaRef.current?.focus())
     } catch (error) {
-      speechRecognitionRef.current = undefined
       speechSessionRef.current = undefined
       setSpeechActive(false)
       onToast(error instanceof Error ? error.message : '无法启动语音识别，请重试。', 'error')
@@ -2355,6 +2244,32 @@ function Composer({
       setSpeechRequesting(false)
     }
   }
+
+  useEffect(() => paperAgent.voice.onEvent((event) => {
+    const session = speechSessionRef.current
+    if (!session) return
+    if (session.sessionId && session.sessionId !== event.sessionId) return
+    if (!session.sessionId) session.sessionId = event.sessionId
+
+    if (event.type === 'started') {
+      setSpeechActive(true)
+      return
+    }
+    if (event.type === 'result') {
+      const nextValue = `${session.baseValue.slice(0, session.insertionPoint)}${event.transcript}${session.baseValue.slice(session.insertionPoint)}`
+      const nextCursor = session.insertionPoint + event.transcript.length
+      setValue(nextValue)
+      setCursorPosition(nextCursor)
+      requestAnimationFrame(() => {
+        if (document.activeElement !== textareaRef.current) return
+        textareaRef.current?.setSelectionRange(nextCursor, nextCursor)
+      })
+      return
+    }
+    speechSessionRef.current = undefined
+    setSpeechActive(false)
+    if (event.type === 'error') onToast(event.message, 'error')
+  }), [onToast])
 
   useEffect(() => {
     if (interactionLocked && speechActive) stopSpeech()
@@ -4469,15 +4384,33 @@ function VoiceSettings({
   onToast: (message: string, tone?: 'success' | 'error') => void
 }) {
   const [busy, setBusy] = useState<'request' | 'refresh'>()
+  const [recognitionStatus, setRecognitionStatus] = useState<VoiceRecognitionStatus>()
   const microphoneStatus = systemPermissions?.microphone ?? 'unknown'
-  const recognitionAvailable = Boolean(getSpeechRecognitionConstructor())
   const platformSupported = systemPermissions?.platform !== 'unsupported'
+
+  useEffect(() => {
+    let active = true
+    void paperAgent.voice.status()
+      .then((status) => { if (active) setRecognitionStatus(status) })
+      .catch(() => {
+        if (active) setRecognitionStatus({
+          available: false,
+          authorization: 'unknown',
+          locale: 'zh-CN',
+          onDevice: false,
+          message: '无法读取 macOS 语音识别状态。',
+        })
+      })
+    return () => { active = false }
+  }, [])
 
   const requestMicrophone = async () => {
     if (busy) return
     setBusy('request')
     try {
       const next = await onRequestMicrophone()
+      const status = await paperAgent.voice.status()
+      setRecognitionStatus(status)
       if (next.microphone === 'granted') onToast('麦克风权限已授权，可以在输入框使用语音输入')
       else onToast('麦克风权限尚未授予，请在系统设置中允许学术 Agent 使用麦克风', 'error')
     } catch (error) {
@@ -4492,6 +4425,8 @@ function VoiceSettings({
     setBusy('refresh')
     try {
       const next = await onRefreshPermissions()
+      const status = await paperAgent.voice.status()
+      setRecognitionStatus(status)
       onToast(next.microphone === 'granted' ? '麦克风权限已确认' : '麦克风权限仍未授予', next.microphone === 'granted' ? 'success' : 'error')
     } catch (error) {
       onToast(error instanceof Error ? error.message : '重新检查麦克风权限失败', 'error')
@@ -4516,12 +4451,12 @@ function VoiceSettings({
           </div>
           <div className="settings-card-row">
             <span className="settings-card-icon"><Activity size={17} /></span>
-            <span className="settings-card-copy"><strong>系统语音识别</strong><small>使用当前桌面内置的 Web Speech Recognition；识别文本只会插入输入框，不会自动发送。</small></span>
-            <StatusBadge status={recognitionAvailable ? 'connected' : 'failed'}>{recognitionAvailable ? '可用' : '不可用'}</StatusBadge>
+            <span className="settings-card-copy"><strong>macOS 原生语音识别</strong><small>{recognitionStatus?.message ?? (recognitionStatus?.onDevice ? '支持本机识别；文本只会插入输入框，不会自动发送。' : '当前语言可能需要 Apple 语音服务与网络；文本不会自动发送。')}</small></span>
+            <StatusBadge status={recognitionStatus?.available ? 'connected' : recognitionStatus ? 'failed' : 'demo'}>{recognitionStatus ? (recognitionStatus.available ? (recognitionStatus.onDevice ? '本机可用' : '服务可用') : '不可用') : '检查中'}</StatusBadge>
           </div>
           <div className="settings-card-row">
             <span className="settings-card-icon"><FileText size={17} /></span>
-            <span className="settings-card-copy"><strong>默认语言</strong><small>语音识别使用简体中文，识别过程中保留实时中间结果。</small></span>
+            <span className="settings-card-copy"><strong>默认语言</strong><small>首次使用会由 macOS 请求语音识别授权，识别过程中保留实时中间结果。</small></span>
             <span className="voice-language-value">简体中文（zh-CN）</span>
           </div>
         </section>

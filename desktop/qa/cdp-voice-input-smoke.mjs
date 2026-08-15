@@ -56,6 +56,7 @@ try {
 
   const composer = await evaluate(`(async () => {
     const permission = await window.paperAgent.systemPermissions.get()
+    const recognition = await window.paperAgent.voice.status()
     const button = document.querySelector('.microphone-button')
     return {
       permission: {
@@ -67,7 +68,12 @@ try {
         fullAccessReady: permission.fullAccessReady,
         checkedAt: permission.checkedAt,
       },
-      speechRecognitionType: typeof (window.SpeechRecognition ?? window.webkitSpeechRecognition),
+      recognition,
+      voiceBridge: {
+        start: typeof window.paperAgent.voice.start,
+        stop: typeof window.paperAgent.voice.stop,
+        onEvent: typeof window.paperAgent.voice.onEvent,
+      },
       exists: Boolean(button),
       disabled: button?.disabled,
       label: button?.getAttribute('aria-label'),
@@ -75,7 +81,10 @@ try {
     }
   })()`)
   if (!composer.exists || composer.label !== '开始语音输入') throw new Error('输入框没有可访问的语音输入按钮。')
-  if (composer.speechRecognitionType !== 'function') throw new Error('打包应用没有提供 Web Speech Recognition。')
+  if (!composer.recognition?.available || composer.recognition.locale !== 'zh-CN') throw new Error('macOS 原生语音识别组件不可用。')
+  if (composer.voiceBridge.start !== 'function' || composer.voiceBridge.stop !== 'function' || composer.voiceBridge.onEvent !== 'function') {
+    throw new Error('原生语音识别桥接不完整。')
+  }
   if (!composer.permission || typeof composer.permission.microphone !== 'string') throw new Error('麦克风权限桥接没有返回真实状态。')
 
   const composerScreenshotPath = `${outputDir}/voice-input-composer.png`
@@ -94,13 +103,14 @@ try {
     button.click()
   })()`)
   await waitFor("Boolean(document.querySelector('.voice-settings-card'))")
+  await waitFor("/本机可用|服务可用|不可用/.test(document.querySelector('.voice-settings-card')?.textContent ?? '')")
 
   const settings = await evaluate(`(() => ({
     text: document.querySelector('.settings-hub-page')?.textContent ?? '',
     requestButton: [...document.querySelectorAll('.voice-settings-card button')].some((item) => item.textContent?.includes('请求权限')),
     openSettingsButton: [...document.querySelectorAll('.voice-settings-actions button')].some((item) => item.textContent?.includes('打开系统设置')),
   }))()`)
-  for (const expected of ['麦克风权限', '系统语音识别', '简体中文（zh-CN）']) {
+  for (const expected of ['麦克风权限', 'macOS 原生语音识别', '简体中文（zh-CN）']) {
     if (!settings.text.includes(expected)) throw new Error(`语音设置缺少“${expected}”。`)
   }
   if (!settings.requestButton || !settings.openSettingsButton) throw new Error('语音权限操作没有完整显示。')
@@ -111,7 +121,8 @@ try {
   const summary = {
     ok: true,
     permission: composer.permission,
-    speechRecognitionType: composer.speechRecognitionType,
+    recognition: composer.recognition,
+    voiceBridge: composer.voiceBridge,
     composerButton: {
       exists: composer.exists,
       disabled: composer.disabled,

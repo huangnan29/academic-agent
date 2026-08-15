@@ -28,6 +28,9 @@ import type {
   SystemPermissionKind,
   SystemPermissionSnapshot,
   WorkspaceState,
+  VoiceInputEvent,
+  VoiceInputStartResult,
+  VoiceRecognitionStatus,
 } from '../shared/contracts'
 
 declare global {
@@ -66,6 +69,12 @@ declare global {
         requestFullAccess(): Promise<SystemPermissionSnapshot>
         requestMicrophone(): Promise<SystemPermissionSnapshot>
         openSettings(kind: SystemPermissionKind): Promise<void>
+      }
+      voice: {
+        status(): Promise<VoiceRecognitionStatus>
+        start(): Promise<VoiceInputStartResult>
+        stop(sessionId: string): Promise<void>
+        onEvent(listener: (event: VoiceInputEvent) => void): () => void
       }
       provider: {
         save(input: ProviderInput): Promise<ProviderProfile>

@@ -456,14 +456,16 @@
 - 确认框、卡片操作、右侧详情和背景遮罩在 1480×940 原生窗口内无重叠或裁切；运行时错误为 0。
 - 证据：`output/native-literature-delete-final/literature-delete-confirm.png`、`output/native-literature-delete-final/literature-demo-deleted.png`。最终安装副本与构建产物 `app.asar` SHA-256 均为 `ec5ffa992bc1e80352ca45029c67da73f81f432f75e0611be616c319269d4d19`。
 
-## 31. 语音输入原生验收（2026-08-15）
+## 31. 语音输入原生验收与网络错误修复（2026-08-15）
 
 - 最终打包 Electron 输入框在模型选择器与发送按钮之间显示 32px 中性圆形麦克风按钮；空闲态可访问名称为“开始语音输入”，没有使用品牌色抢占输入框焦点。
-- “设置 → 语音输入”真实显示麦克风权限、系统语音识别、简体中文 `zh-CN`、请求权限、重新检查和打开系统设置；1480×940 原生窗口内没有重叠、裁切或竖排文案。
-- 主进程桥接返回 macOS 真实状态 `microphone=not-determined`，打包渲染环境确认 `webkitSpeechRecognition` 为可用函数；没有把尚未询问冒充成已授权。
+- “设置 → 语音输入”显示麦克风权限、macOS 原生语音识别、简体中文 `zh-CN`、请求权限、重新检查和打开系统设置；1480×940 原生窗口内没有重叠、裁切或竖排文案。
+- 旧版虽存在 `webkitSpeechRecognition` 构造器，但用户真实使用返回 `network`，证明“构造器存在”不等于桌面服务可用；旧链路已经移除，历史截图只证明界面，不再作为功能证据。
+- 新版随 `.app` 打包独立的 Speech + AVFAudio 原生组件，状态检查真实返回 `available=true`、`onDevice=true`、`locale=zh-CN`、`authorization=not-determined`；系统支持时要求本机识别。
+- 新版原生桥接与设置页证据：`output/native-voice-status-final/voice-input-composer.png`、`output/native-voice-status-final/voice-input-settings.png`、`output/native-voice-status-final/summary.json`。
 - Info.plist 包含中文 `NSMicrophoneUsageDescription` 与 `NSSpeechRecognitionUsageDescription`；媒体权限只允许可信主窗口音频请求，并拒绝摄像头和非可信页面。
 - 证据：`desktop/output/voice-input/voice-input-composer.png`、`desktop/output/voice-input/voice-input-settings.png`、`desktop/output/voice-input/summary.json`。
-- 类型检查、生产构建和 `.app` 打包通过；最终 `/Applications/学术 Agent.app` 与构建产物 `app.asar` SHA-256 均为 `6fe0e7ac7c6e5f0e105c26faa4a602926e980d84f4f403f8d2701583f8ae8b5f`，安装副本已重新启动并启用 renderer 沙箱。
-- 边界：本机尚未在 macOS 弹窗中授权麦克风，因此真实说话转写需要用户首次点击后完成授权再人工确认；本轮已验证权限请求入口、真实状态、识别构造器、界面和打包权限声明，不把未进行的口述测试写成通过。
+- 类型检查、生产构建和 `.app` 打包通过；打包与安装副本均包含可执行的原生语音组件及两项用途说明。最终 `/Applications/学术 Agent.app` 与构建产物 `app.asar` SHA-256 均为 `503e9d755ed7af3ed64a60be74e637abbc85559f0f7864af4e53c8f3f7868a3d`，安装副本已重新启动并启用 renderer 沙箱。
+- 边界：本机 Speech 授权尚未在 macOS 弹窗中确认，因此真实说话转写需要用户首次点击新版麦克风后选择允许并人工确认；本轮验证原生编译、状态、桥接、打包资源和安装一致性，不把未进行的口述测试写成通过。
 
 final result: passed

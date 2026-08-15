@@ -7,7 +7,9 @@
   "main": "dist-electron/main/index.js",
   "author": "学术 Agent Contributors",
   "scripts": {
+    "predev": "node scripts/build-speech-helper.mjs",
     "dev": "electron-vite dev",
+    "prebuild": "node scripts/build-speech-helper.mjs",
     "build": "electron-vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
@@ -49,6 +51,12 @@
       "build/dock-icon-dark.png",
       "dist-electron/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "native/bin/academic-speech-helper",
+        "to": "native/academic-speech-helper"
+      }
     ],
     "mac": {
       "category": "public.app-category.productivity",

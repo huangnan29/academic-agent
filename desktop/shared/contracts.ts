@@ -95,6 +95,32 @@ export interface SystemPermissionSnapshot {
   checkedAt: string
 }
 
+export type VoiceRecognitionAuthorization =
+  | 'authorized'
+  | 'denied'
+  | 'not-determined'
+  | 'restricted'
+  | 'unsupported'
+  | 'unknown'
+
+export interface VoiceRecognitionStatus {
+  available: boolean
+  authorization: VoiceRecognitionAuthorization
+  locale: string
+  onDevice: boolean
+  message?: string
+}
+
+export interface VoiceInputStartResult {
+  sessionId: string
+}
+
+export type VoiceInputEvent =
+  | { sessionId: string; type: 'started'; onDevice: boolean }
+  | { sessionId: string; type: 'result'; transcript: string; final: boolean }
+  | { sessionId: string; type: 'error'; code: string; message: string }
+  | { sessionId: string; type: 'ended' }
+
 export interface ConversationUpdateInput {
   conversationId: string
   title?: string

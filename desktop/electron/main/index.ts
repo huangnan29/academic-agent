@@ -11,6 +11,7 @@ import { McpManager } from '../services/mcp'
 import { CredentialStore } from '../services/storage/credentialStore'
 import { WorkspaceRepository } from '../services/storage/workspaceRepository'
 import { SystemPermissionService } from './systemPermissions'
+import { VoiceInputService } from './voiceInput'
 
 const hasLock = app.requestSingleInstanceLock()
 if (!hasLock) app.quit()
@@ -18,6 +19,7 @@ if (!hasLock) app.quit()
 let mainWindow: BrowserWindow | null = null
 let chatCoordinator: ChatCoordinator | null = null
 let mcpManager: McpManager | null = null
+let voiceInputService: VoiceInputService | null = null
 let cleanupStarted = false
 let cleanupCompleted = false
 
@@ -43,6 +45,8 @@ async function startApplication(): Promise<void> {
 
     const configuration = new ConfigurationService(repository, credentials)
     const systemPermissions = new SystemPermissionService()
+    const voiceInput = new VoiceInputService()
+    voiceInputService = voiceInput
     chatCoordinator = new ChatCoordinator(repository, configuration, systemPermissions)
     const paperCoordinator = new PaperCoordinator(repository, configuration)
     const exporter = new ExportCoordinator(repository)
@@ -68,6 +72,7 @@ async function startApplication(): Promise<void> {
       exporter,
       literature,
       systemPermissions,
+      voiceInput,
       applyAppearance(appearance: Parameters<typeof applyNativeAppearance>[1]) {
         if (!mainWindow || mainWindow.isDestroyed()) return
         applyNativeAppearance(mainWindow, appearance)
@@ -139,7 +144,10 @@ app.on('before-quit', (event) => {
   if (cleanupStarted) return
   cleanupStarted = true
   chatCoordinator?.cancelAll()
-  void (mcpManager?.disconnectAll() ?? Promise.resolve())
+  void Promise.all([
+    voiceInputService?.stop() ?? Promise.resolve(),
+    mcpManager?.disconnectAll() ?? Promise.resolve(),
+  ])
     .catch(() => undefined)
     .finally(() => {
       cleanupCompleted = true

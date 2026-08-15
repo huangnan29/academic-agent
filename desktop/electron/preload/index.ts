@@ -20,6 +20,7 @@ import type {
   SidebarPreferencesInput,
   SkillInput,
   SystemPermissionKind,
+  VoiceInputEvent,
 } from '../../shared/contracts'
 
 const api = {
@@ -66,6 +67,16 @@ const api = {
     requestMicrophone: () => ipcRenderer.invoke(IPC.systemPermissionsRequestMicrophone),
     openSettings: (kind: SystemPermissionKind) =>
       ipcRenderer.invoke(IPC.systemPermissionsOpenSettings, kind),
+  },
+  voice: {
+    status: () => ipcRenderer.invoke(IPC.voiceInputStatus),
+    start: () => ipcRenderer.invoke(IPC.voiceInputStart),
+    stop: (sessionId: string) => ipcRenderer.invoke(IPC.voiceInputStop, sessionId),
+    onEvent: (listener: (event: VoiceInputEvent) => void) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, payload: VoiceInputEvent) => listener(payload)
+      ipcRenderer.on(IPC.voiceInputEvent, wrapped)
+      return () => ipcRenderer.removeListener(IPC.voiceInputEvent, wrapped)
+    },
   },
   provider: {
     save: (input: ProviderInput) => ipcRenderer.invoke(IPC.providerSave, input),
