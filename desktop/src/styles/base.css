@@ -1,0 +1,208 @@
+:root {
+  color: oklch(0.22 0.015 35);
+  background: oklch(1 0 0);
+  font-family: var(--ui-font-family, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --background: oklch(1 0 0);
+  --surface: color-mix(in srgb, var(--background) 97%, var(--text));
+  --surface-strong: color-mix(in srgb, var(--background) 93%, var(--text));
+  --surface-hover: color-mix(in srgb, var(--background) 89%, var(--text));
+  --border: color-mix(in srgb, var(--background) 78%, var(--text));
+  --border-strong: color-mix(in srgb, var(--background) 64%, var(--text));
+  --text: oklch(0.22 0.015 35);
+  --text-secondary: color-mix(in srgb, var(--text) 72%, var(--background));
+  --text-muted: color-mix(in srgb, var(--text) 54%, var(--background));
+  --brand: oklch(0.52 0.16 36);
+  --brand-hover: color-mix(in srgb, var(--brand) 82%, var(--text));
+  --brand-soft: color-mix(in srgb, var(--brand) 12%, var(--background));
+  --brand-border: color-mix(in srgb, var(--brand) 38%, var(--background));
+  --success: oklch(0.48 0.13 152);
+  --success-soft: oklch(0.96 0.03 152);
+  --warning: oklch(0.56 0.13 72);
+  --warning-soft: oklch(0.965 0.035 72);
+  --error: oklch(0.51 0.18 27);
+  --error-soft: oklch(0.965 0.027 27);
+  --info: oklch(0.47 0.12 245);
+  --info-soft: oklch(0.96 0.025 245);
+  --sidebar-width: clamp(248px, 18vw, 360px);
+  --right-width: clamp(320px, 23vw, 440px);
+  --titlebar-height: 52px;
+  --mac-control-row-height: 44px;
+  --sidebar-titlebar-height: 88px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --ui-font-scale: 1;
+  --shadow-color: color-mix(in srgb, var(--text) 22%, transparent);
+  --sidebar-background: var(--surface);
+  --diff-added: color-mix(in srgb, var(--success) 18%, var(--background));
+  --diff-removed: color-mix(in srgb, var(--error) 15%, var(--background));
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  min-width: 920px;
+  min-height: 640px;
+  background: var(--background);
+}
+
+.app-shell {
+  color: var(--text);
+  font-family: var(--ui-font-family);
+  -webkit-font-smoothing: antialiased;
+}
+
+.app-shell[data-theme="dark"] {
+  --success: oklch(0.72 0.13 152);
+  --success-soft: color-mix(in srgb, var(--success) 13%, var(--background));
+  --warning: oklch(0.77 0.13 72);
+  --warning-soft: color-mix(in srgb, var(--warning) 13%, var(--background));
+  --error: oklch(0.72 0.16 27);
+  --error-soft: color-mix(in srgb, var(--error) 13%, var(--background));
+  --info: oklch(0.73 0.1 245);
+  --info-soft: color-mix(in srgb, var(--info) 13%, var(--background));
+}
+
+.app-shell[data-translucent-sidebar="on"] {
+  --sidebar-background: color-mix(in srgb, var(--surface) 72%, transparent);
+}
+
+.app-shell[data-translucent-sidebar="on"] .sidebar,
+.app-shell[data-translucent-sidebar="on"] .settings-sidebar {
+  backdrop-filter: blur(28px) saturate(1.25);
+}
+
+.app-shell[data-font-smoothing="off"] {
+  -webkit-font-smoothing: auto;
+}
+
+button,
+input,
+textarea,
+select {
+  color: inherit;
+  font: inherit;
+}
+
+button {
+  border: 0;
+}
+
+.app-shell[data-pointer-cursor="on"] button:not(:disabled),
+.app-shell[data-pointer-cursor="on"] [role="button"],
+.app-shell[data-pointer-cursor="on"] a {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+button,
+input,
+textarea,
+select {
+  outline: none;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--brand);
+}
+
+.window-drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag,
+.window-drag-region button,
+.window-drag-region input,
+.window-drag-region select {
+  -webkit-app-region: no-drag;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(560px, 1fr) var(--expanded-right-width, var(--right-width));
+  width: 100vw;
+  height: 100vh;
+  background: var(--background);
+  overflow: hidden;
+}
+
+.app-shell.sidebar-collapsed {
+  grid-template-columns: 80px minmax(560px, 1fr) var(--expanded-right-width, var(--right-width));
+}
+
+.app-shell.right-collapsed {
+  grid-template-columns: var(--sidebar-width) minmax(560px, 1fr) 0;
+}
+
+.app-shell.sidebar-collapsed.right-collapsed {
+  grid-template-columns: 80px minmax(560px, 1fr) 0;
+}
+
+.icon-button {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.icon-button:hover,
+.icon-button.is-active {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+.app-shell[data-reduced-motion="on"] *,
+.app-shell[data-reduced-motion="on"] *::before,
+.app-shell[data-reduced-motion="on"] *::after {
+  scroll-behavior: auto !important;
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell[data-reduced-motion="system"] *,
+  .app-shell[data-reduced-motion="system"] *::before,
+  .app-shell[data-reduced-motion="system"] *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+

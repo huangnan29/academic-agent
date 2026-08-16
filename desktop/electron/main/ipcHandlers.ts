@@ -727,6 +727,8 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
     return paper.generateOutline(outlineGenerateSchema.parse(payload))
   })
 
+  // 预留接口：主进程链路（schema 校验、边界检查、持久化）已完整，等待提纲可视化编辑器接入；
+  // 当前仅由 qa/native 下的 CDP 冒烟脚本调用验证，渲染层 UI 尚无调用方。
   handle(IPC.outlineSave, async (_event, projectId: unknown, payload: unknown) => {
     assertId(projectId, '项目')
     const outline = outlineSchema.parse(payload)
@@ -897,6 +899,7 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
     await shell.openExternal(url)
   })
 
+  // 预留接口：应用版本/平台信息查询，供后续“关于”面板或诊断页使用；当前渲染层与 QA 脚本均无调用方。
   handle(IPC.appInfo, () => ({
     version: app.getVersion(),
     platform: process.platform,

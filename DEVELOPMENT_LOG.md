@@ -1,5 +1,15 @@
 # 学术 Agent 开发日志
 
+## 2026-08-16：结构整顿（App.tsx / styles.css 拆分与 qa 目录重组）
+
+- 纯结构重构，零业务逻辑与用户可见行为变更：`desktop/src/App.tsx` 从 6157 行拆为 1186 行主文件 + `lib/`（8 个工具模块）+ `components/`（13 个新组件文件）+ `pages/`（5 个新页面文件）；既有独立组件（OutlineTree、OutlineArchitectureSummary、MessageLiteratureActions、AppearanceSettingsPage）随目录约定迁移。
+- `desktop/src/styles.css` 从 5266 行拆为 9 个按原顺序导入的分片（`desktop/src/styles/`），原文件改为 `@import` 聚合入口；构建产物经逐字节比对确认与拆分前语义一致（仅注释与空行差异）。
+- `desktop/qa/` 40 余个脚本按类型归入 `native/`（CDP 原生冒烟）、`smoke/`（单元冒烟）、`prepare/`（工作区准备）、`mocks/`（桩服务）、`acceptance/`（大纲验收）五个子目录，同步修正相对导入与用法提示。
+- 未完成状态收口：`outline:save` 与 `app:info` 两个预留 IPC 接口以中文注释标注“主进程链路完整、等待渲染层接入”，未删除。
+- 验证：`npm run typecheck` 与 `npm run build` 通过；打包 arm64 `.app` 后在隔离 `user-data-dir` 上完成原生 Electron 交互回归——阶段 1 共 21 步（启动三栏渲染、样式变量与级联、对话/文稿切换、Composer 加号菜单/AccessPicker/ModelPicker/slash 菜单、权限中心对话框、右侧三 Tab 与大纲树/结构摘要、新建与删除研究对话框、设置四组导航与全部分区、配置三 Tab、外观切深色、文献库与 Skills 路由、侧栏键盘调宽）全部通过；阶段 2 重启恢复（深色主题、侧栏宽度 292px、活动项目与章节数据）4 步全部通过；`qa/native/cdp-sidebar-smoke.mjs` 侧栏专项冒烟 `ok: true`。两阶段原生运行时错误均为 0。
+- 证据：`output/native-refactor-regression/report-phase-1.json`、`report-phase-2.json` 与 01–19 号截图；`output/native-refactor-regression/sidebar/` 侧栏冒烟截图。
+- 未验证边界：本轮未调用真实模型 API 与真实 MCP 工具（回归聚焦 UI 组件树渲染与交互，业务逻辑代码未改动）；未生成 DMG，未同步 `/Applications/学术 Agent.app`（用户未授权发布流程）；侧栏手动拖拽“项目重排”因隔离工作区仅 1 个项目而跳过（对话重排已验证）。
+
 ## 2026-08-14：补齐文献永久删除
 
 - 修正把用户要求的“删除文献”误实现为“移出项目”的产品偏差；文献卡片现在同时提供“移出项目”和“删除”，两种行为不再混淆。
