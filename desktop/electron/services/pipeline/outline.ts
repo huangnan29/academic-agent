@@ -83,6 +83,14 @@ function normalizeNode(
     ),
   ]
   const childFallback = Math.max(100, Math.round(targetWords / Math.max(1, childValues.length)))
+  const servesResearchQuestions = stringArray(value.servesResearchQuestions, 20, 500)
+  const keyClaims = stringArray(value.keyClaims, 20, 1_000)
+  const evidenceNeeds = stringArray(value.evidenceNeeds, 10, 40).filter((item): item is NonNullable<OutlineNode['evidenceNeeds']>[number] => (
+    ['literature', 'project-data', 'case-material', 'analysis'].includes(item)
+  ))
+  const contentForms = stringArray(value.contentForms, 10, 40).filter((item): item is NonNullable<OutlineNode['contentForms']>[number] => (
+    ['prose', 'table', 'diagram', 'formula', 'code'].includes(item)
+  ))
 
   return {
     id: firstString(value.id)?.trim().slice(0, 200) || randomUUID(),
@@ -93,6 +101,12 @@ function normalizeNode(
       `围绕“${title}”完成清晰、可核验的论证。`,
     targetWords,
     citationIds,
+    servesResearchQuestions,
+    role: firstString(value.role)?.trim().slice(0, 1_000) || undefined,
+    keyClaims,
+    evidenceNeeds,
+    contentForms,
+    transition: firstString(value.transition)?.trim().slice(0, 1_000) || undefined,
     children: childValues.map((child) =>
       normalizeNode(child, Math.min(3, level + 1), childFallback, budget),
     ),
@@ -190,6 +204,15 @@ function asNumber(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value
   if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) return Number(value)
   return undefined
+}
+
+function stringArray(value: unknown, maxItems: number, maxChars: number): string[] {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim().slice(0, maxChars))
+    .filter(Boolean))]
+    .slice(0, maxItems)
 }
 
 function clampLevel(level: number): 1 | 2 | 3 {

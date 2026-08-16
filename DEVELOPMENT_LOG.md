@@ -191,6 +191,18 @@
 - 隔离安装版通过真实 preload/IPC 读取原生状态，桥接 `start/stop/onEvent` 完整；证据保存在 `output/native-voice-status-final/`。
 - 本机 Speech 授权当前仍为“尚未询问”；首次点击更新后应用的麦克风按钮时，用户仍需在 macOS 系统弹窗中选择允许。真实口述转写留待用户完成系统授权后确认。
 
+### 2026-08-15：专业感知的三级大纲架构
+
+- 大纲生成从单一通用提示升级为“专业类别识别 → 标题语义与研究动作分析 → 六类结构模式选择 → 三级节点生成 → 本机确定性质量检查”。
+- 首批覆盖文学/语言、理学、工学、法学、设计/艺术、管理/经济、教育、医学/健康和跨学科；结构模式包含实证研究、系统工程、主题综述、理论/规范分析、案例研究、政策/管理研究。
+- 没有真实项目数据时不会选择承诺实证结果的结构；质量检查会拒绝结果章节、越权引用、层级空洞、重复标题和不闭合字数预算。
+- 新节点保存研究问题、章节功能、待论证主张、证据需求、内容形态和衔接信息；旧工作区继续读取原节点，不自动改写用户大纲。
+- 右侧工作台新增可折叠“结构识别”摘要，显示专业类别、研究方向、结构模式、匹配置信度、全文字数和质量问题。
+- 固定验收集覆盖 8 个多学科题目，分类路由无失败项；5 类质量反例全部正确判定不通过。由于未调用真实模型逐题生成，8 份实际目录语义仍标为未验证。
+- 类型检查、生产构建、Apple Silicon `.app` 打包与原生 Electron 隔离工作区验收通过。原生项目保存 4 章、8 节、16 目，结构识别为政策/管理研究，质量得分 100，重启后数据和摘要均可读取。
+- 最终 `/Applications/学术 Agent.app` 已更新并重新启动，安装副本与打包产物 `app.asar` SHA-256 均为 `0dd9dcdcc06bc6a9c8d44d76f7a56b6e4bd3f0c7dab7b32d6b41d42102bc71e1`。
+- 证据：`output/native-outline-architecture-final/outline-architecture-summary.png`、`output/native-outline-architecture-final/outline-architecture-details.png`、`output/native-outline-architecture-final/outline-architecture-summary.json`。
+
 ## 当前架构
 
 | 模块 | 主要职责 | 关键位置 |

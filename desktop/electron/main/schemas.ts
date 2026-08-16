@@ -216,6 +216,23 @@ export const outlineNodeSchema: z.ZodType<OutlineNode> = z.lazy(() =>
     targetWords: z.number().int().min(100).max(100000),
     citationIds: z.array(z.string().min(1).max(200)).max(100),
     children: z.array(outlineNodeSchema).max(100),
+    servesResearchQuestions: z.array(z.string().trim().min(1).max(500)).max(20).optional(),
+    role: z.string().trim().max(1000).optional(),
+    keyClaims: z.array(z.string().trim().min(1).max(1000)).max(20).optional(),
+    evidenceNeeds: z.array(z.enum([
+      'literature',
+      'project-data',
+      'case-material',
+      'analysis',
+    ])).max(10).optional(),
+    contentForms: z.array(z.enum([
+      'prose',
+      'table',
+      'diagram',
+      'formula',
+      'code',
+    ])).max(10).optional(),
+    transition: z.string().trim().max(1000).optional(),
   }),
 )
 

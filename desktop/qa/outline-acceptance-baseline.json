@@ -1,0 +1,884 @@
+{
+  "schemaVersion": 1,
+  "name": "三级大纲固定题目验收基线",
+  "description": "用于比较旧版与新版大纲路由、三级粒度和证据边界的固定题目集。题目和引用 ID 仅用于本机质量验收，不代表真实研究结果或真实文献。",
+  "adapterContract": {
+    "preferredClassifierExport": "classifyResearchBrief",
+    "preferredQualityExport": "runOutlineQualityChecks",
+    "optionalGeneratorExport": "generateOutline",
+    "classifierInput": "classifyResearchBrief(brief, { evidence, literature })",
+    "qualityInput": "runOutlineQualityChecks(outline, { brief, architecture, evidence, allowedCitationIds })",
+    "qualityIssueCodes": [
+      "OUTLINE_DEPTH_INCOMPLETE",
+      "OUTLINE_DEPTH_EXCESS",
+      "WORD_BUDGET_NOT_CLOSED",
+      "DUPLICATE_OUTLINE_TITLE",
+      "UNMAPPED_CITATION",
+      "RESULT_WITHOUT_DATA",
+      "PATTERN_MISMATCH",
+      "DISCIPLINE_PATTERN_MISMATCH"
+    ]
+  },
+  "acceptanceRules": {
+    "requiredCaseCount": 8,
+    "requiredDisciplineFamilies": [
+      "literature-language",
+      "science",
+      "engineering",
+      "law",
+      "design-art",
+      "interdisciplinary"
+    ],
+    "requiredPatterns": [
+      "empirical-imrad",
+      "system-engineering",
+      "thematic-review",
+      "theoretical-normative",
+      "case-study",
+      "policy-management"
+    ],
+    "resultBoundary": "没有真实项目数据、实验记录、问卷样本或可核验案例材料时，不能在大纲中承诺实测结果、统计显著性、回归系数、样本结论或虚构的性能数字。",
+    "wordBudgetBoundary": "全文目标字数、一级节点之和、二级节点与三级节点之和必须闭合；允许前后置部分不计入正文，但不能重复计算同一节点预算。",
+    "citationBoundary": "citationIds 只能来自本次质量检查传入的 allowedCitationIds；固定题目集中的 qa-ref-* 仅为白名单测试值。"
+  },
+  "cases": [
+    {
+      "id": "literature-narrative",
+      "label": "文学：作品叙事与伦理阐释",
+      "brief": {
+        "title": "余华小说《活着》的苦难叙事与伦理意蕴研究",
+        "paperType": "学位论文",
+        "discipline": "文学",
+        "language": "zh-CN",
+        "targetWords": 12000,
+        "requirements": "以作品文本和可核验文献为依据，不能虚构访谈、问卷、实验或统计结果。",
+        "keywords": ["余华", "活着", "苦难叙事", "伦理意蕴"]
+      },
+      "evidence": {
+        "hasRealData": false,
+        "available": ["literature", "case-material"],
+        "description": "有作品文本这一分析材料，但没有问卷、实验或统计数据。"
+      },
+      "expected": {
+        "disciplineFamilies": ["literature-language"],
+        "patterns": ["theoretical-normative"],
+        "minimumConfidence": 0.55,
+        "mainBodyMustReachLevel3": true,
+        "forbidResultWithoutData": true,
+        "semanticAnchorGroups": [
+          ["文本", "作品", "叙事"],
+          ["人物", "伦理", "意象", "视角"],
+          ["阐释", "分析", "研究"]
+        ],
+        "minimumMatchedAnchorGroups": 2
+      },
+      "allowedCitationIds": []
+    },
+    {
+      "id": "science-experiment",
+      "label": "理学：材料性能实验研究",
+      "brief": {
+        "title": "二维钙钛矿材料缺陷对光催化性能的影响：实验研究",
+        "paperType": "学位论文",
+        "discipline": "理学",
+        "language": "zh-CN",
+        "targetWords": 14000,
+        "requirements": "仅在项目确实提供实验记录和测量数据时撰写结果；公式、表格和图示必须说明变量或数据来源。",
+        "keywords": ["二维钙钛矿", "材料缺陷", "光催化", "性能测试"]
+      },
+      "evidence": {
+        "hasRealData": true,
+        "available": ["literature", "project-data", "analysis"],
+        "description": "验收输入声明存在可供核验的实验记录和测量数据；脚本不替用户核验数据真伪。"
+      },
+      "expected": {
+        "disciplineFamilies": ["science"],
+        "patterns": ["empirical-imrad"],
+        "minimumConfidence": 0.65,
+        "mainBodyMustReachLevel3": true,
+        "forbidResultWithoutData": false,
+        "semanticAnchorGroups": [
+          ["理论", "机制", "模型"],
+          ["实验", "方法", "研究设计"],
+          ["结果", "性能", "数据", "分析"]
+        ],
+        "minimumMatchedAnchorGroups": 3,
+        "preferredContentForms": ["formula", "table", "diagram"]
+      },
+      "allowedCitationIds": ["qa-ref-sci-001", "qa-ref-sci-002"]
+    },
+    {
+      "id": "science-theory-no-data",
+      "label": "理学：无实测数据的理论模型分析",
+      "brief": {
+        "title": "城市热岛效应形成机制的理论模型分析",
+        "paperType": "课程论文",
+        "discipline": "理学",
+        "language": "zh-CN",
+        "targetWords": 9000,
+        "requirements": "当前没有城市监测数据或模拟输出，只能基于理论模型和已有研究讨论机制、假设与适用边界。",
+        "keywords": ["城市热岛", "形成机制", "理论模型", "适用边界"]
+      },
+      "evidence": {
+        "hasRealData": false,
+        "available": ["literature", "analysis"],
+        "description": "没有项目测量数据、仿真输出或可复现的观测样本。"
+      },
+      "expected": {
+        "disciplineFamilies": ["science"],
+        "patterns": ["theoretical-normative", "thematic-review"],
+        "minimumConfidence": 0.5,
+        "mainBodyMustReachLevel3": true,
+        "forbidResultWithoutData": true,
+        "semanticAnchorGroups": [
+          ["理论", "机制", "模型"],
+          ["文献", "研究进展", "现状"],
+          ["假设", "边界", "局限", "讨论"]
+        ],
+        "minimumMatchedAnchorGroups": 2
+      },
+      "allowedCitationIds": []
+    },
+    {
+      "id": "engineering-platform",
+      "label": "工学：软件系统设计与实现",
+      "brief": {
+        "title": "面向高校科研项目的文献证据管理平台设计与实现",
+        "paperType": "毕业设计",
+        "discipline": "工学",
+        "language": "zh-CN",
+        "targetWords": 13000,
+        "requirements": "围绕需求、架构、关键模块、数据安全和可复现验证展开；没有真实压力测试数据时不得写具体吞吐量或成功率。",
+        "keywords": ["文献证据", "科研项目", "平台设计", "系统实现"]
+      },
+      "evidence": {
+        "hasRealData": false,
+        "available": ["literature", "project-data"],
+        "description": "有需求说明和代码/设计材料，但当前未提供可核验的压力测试结果。"
+      },
+      "expected": {
+        "disciplineFamilies": ["engineering"],
+        "patterns": ["system-engineering"],
+        "minimumConfidence": 0.65,
+        "mainBodyMustReachLevel3": true,
+        "forbidResultWithoutData": true,
+        "semanticAnchorGroups": [
+          ["需求", "场景", "问题"],
+          ["架构", "总体设计", "技术路线"],
+          ["实现", "模块", "接口"],
+          ["测试", "验证", "评价"]
+        ],
+        "minimumMatchedAnchorGroups": 3,
+        "preferredContentForms": ["diagram", "table", "code"]
+      },
+      "allowedCitationIds": []
+    },
+    {
+      "id": "law-case",
+      "label": "法学：典型案例与裁判规则",
+      "brief": {
+        "title": "平台用工劳动关系认定的司法裁判规则研究——基于典型案例",
+        "paperType": "学位论文",
+        "discipline": "法学",
+        "language": "zh-CN",
+        "targetWords": 11000,
+        "requirements": "以公开法条、司法裁判文书和学术文献为依据，区分规范解释、案例事实和作者评价，不虚构案件编号或裁判结论。",
+        "keywords": ["平台用工", "劳动关系", "司法裁判", "裁判规则"]
+      },
+      "evidence": {
+        "hasRealData": false,
+        "available": ["literature", "case-material"],
+        "description": "有公开规范和案例材料，但没有可用于统计推断的样本数据库。"
+      },
+      "expected": {
+        "disciplineFamilies": ["law"],
+        "patterns": ["case-study"],
+        "minimumConfidence": 0.65,
+        "mainBodyMustReachLevel3": true,
+        "forbidResultWithoutData": true,
+        "semanticAnchorGroups": [
+          ["规范", "法理", "制度", "法条"],
+          ["案例", "裁判", "司法"],
+          ["规则", "争议", "完善", "建议"]
+        ],
+        "minimumMatchedAnchorGroups": 3
+      },
+      "allowedCitationIds": []
+    },
+    {
+      "id": "design-interaction",
+      "label": "设计：面向老年用户的交互设计",
+      "brief": {
+        "title": "面向老年用户的社区健康服务小程序交互设计研究",
+        "paperType": "设计实践报告",
+        "discipline": "设计",
+        "language": "zh-CN",
+        "targetWords": 10000,
+        "requirements": "说明用户问题、设计依据、交互方案、原型迭代和评价框架；没有真实用户测试时不得声称满意度提升或可用性统计结果。",
+        "keywords": ["老年用户", "社区健康", "小程序", "交互设计"]
+      },
+      "evidence": {
+        "hasRealData": false,
+        "available": ["literature", "case-material", "project-data"],
+        "description": "有设计 brief 和原型材料，但没有真实用户测试样本或满意度数据。"
+      },
+      "expected": {
+        "disciplineFamilies": ["design-art"],
+        "patterns": ["system-engineering", "case-study"],
+        "minimumConfidence": 0.5,
+        "mainBodyMustReachLevel3": true,
+        "forbidResultWithoutData": true,
+        "semanticAnchorGroups": [
+          ["用户", "需求", "场景"],
+          ["理念", "原则", "设计依据"],
+          ["原型", "方案", "交互", "界面"],
+          ["评价", "迭代", "验证", "可用性框架"]
+        ],
+        "minimumMatchedAnchorGroups": 3,
+        "preferredContentForms": ["diagram", "table"]
+      },
+      "allowedCitationIds": []
+    },
+    {
+      "id": "education-management-mechanism",
+      "label": "教育/管理跨学科：无问卷的作用机制研究",
+      "brief": {
+        "title": "生成式人工智能赋能高校教学的作用机制研究",
+        "paperType": "研究论文",
+        "discipline": "教育/管理（跨学科）",
+        "language": "zh-CN",
+        "targetWords": 12000,
+        "requirements": "当前没有问卷、访谈、实验或学校行政数据；只能基于文献、概念框架和机制分析提出条件化建议，不能生成样本、回归、显著性或效果量。",
+        "keywords": ["生成式人工智能", "高校教学", "作用机制", "教育治理"]
+      },
+      "evidence": {
+        "hasRealData": false,
+        "available": ["literature", "analysis"],
+        "description": "这是教育与管理交叉题目，但未提供任何实证数据。"
+      },
+      "expected": {
+        "disciplineFamilies": ["interdisciplinary", "education", "management-economics"],
+        "patterns": ["policy-management", "theoretical-normative"],
+        "minimumConfidence": 0.45,
+        "mainBodyMustReachLevel3": true,
+        "forbidResultWithoutData": true,
+        "requiresNoEmpiricalSections": true,
+        "forbiddenTitleTokensWithoutData": ["样本", "问卷结果", "回归结果", "统计检验", "显著性", "实验结果", "效果量"],
+        "semanticAnchorGroups": [
+          ["理论", "概念", "文献", "现状"],
+          ["机制", "路径", "条件", "作用"],
+          ["治理", "建议", "实施", "边界"]
+        ],
+        "minimumMatchedAnchorGroups": 3
+      },
+      "allowedCitationIds": []
+    },
+    {
+      "id": "law-engineering-cross",
+      "label": "法学/工学跨学科：自动驾驶责任与证据",
+      "brief": {
+        "title": "自动驾驶事故中算法责任与证据规则研究",
+        "paperType": "研究论文",
+        "discipline": "法学/工学（跨学科）",
+        "language": "zh-CN",
+        "targetWords": 10500,
+        "requirements": "同时说明算法系统的技术边界与责任规范，不得把假设事故场景写成真实事故统计，也不得虚构测试数据或判例。",
+        "keywords": ["自动驾驶", "算法责任", "证据规则", "跨学科"]
+      },
+      "evidence": {
+        "hasRealData": false,
+        "available": ["literature", "case-material", "analysis"],
+        "description": "有规范、技术文献和可讨论的案例材料，但没有真实事故数据库或系统测试数据。"
+      },
+      "expected": {
+        "disciplineFamilies": ["interdisciplinary", "law", "engineering"],
+        "patterns": ["theoretical-normative", "case-study"],
+        "minimumConfidence": 0.35,
+        "mainBodyMustReachLevel3": true,
+        "forbidResultWithoutData": true,
+        "requiresAlternativeReview": true,
+        "semanticAnchorGroups": [
+          ["技术", "算法", "系统"],
+          ["规范", "责任", "权利", "义务"],
+          ["案例", "证据", "争议"]
+        ],
+        "minimumMatchedAnchorGroups": 2
+      },
+      "allowedCitationIds": []
+    }
+  ],
+  "qualityFixtures": [
+    {
+      "id": "valid-closed-outline",
+      "label": "合法三级结构、闭合字数和白名单引用",
+      "brief": {
+        "title": "质量接口正向样例",
+        "paperType": "研究论文",
+        "discipline": "工学",
+        "language": "zh-CN",
+        "targetWords": 1200,
+        "requirements": "仅用于质量接口验收。",
+        "keywords": ["质量接口"]
+      },
+      "evidence": {
+        "hasRealData": false,
+        "available": ["literature", "analysis"],
+        "description": "仅用于结构质量验收。"
+      },
+      "allowedCitationIds": ["qa-ref-001", "qa-ref-002"],
+      "expect": {
+        "passed": true,
+        "forbiddenIssueCodes": []
+      },
+      "outline": [
+        {
+          "id": "qa-valid-1",
+          "title": "研究问题与理论基础",
+          "level": 1,
+          "objective": "明确问题和分析概念。",
+          "targetWords": 600,
+          "citationIds": ["qa-ref-001"],
+          "children": [
+            {
+              "id": "qa-valid-1-1",
+              "title": "核心概念界定",
+              "level": 2,
+              "objective": "界定论文使用的核心概念。",
+              "targetWords": 300,
+              "citationIds": [],
+              "children": [
+                {
+                  "id": "qa-valid-1-1-1",
+                  "title": "概念边界与分析维度",
+                  "level": 3,
+                  "objective": "形成可执行的分析维度。",
+                  "targetWords": 150,
+                  "citationIds": [],
+                  "children": []
+                },
+                {
+                  "id": "qa-valid-1-1-2",
+                  "title": "相关研究的共同问题",
+                  "level": 3,
+                  "objective": "归纳已有研究的共同问题。",
+                  "targetWords": 150,
+                  "citationIds": [],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "id": "qa-valid-1-2",
+              "title": "研究缺口与分析框架",
+              "level": 2,
+              "objective": "说明研究缺口和本文分析框架。",
+              "targetWords": 300,
+              "citationIds": ["qa-ref-002"],
+              "children": [
+                {
+                  "id": "qa-valid-1-2-1",
+                  "title": "已有解释的局限",
+                  "level": 3,
+                  "objective": "说明已有解释的不足。",
+                  "targetWords": 150,
+                  "citationIds": [],
+                  "children": []
+                },
+                {
+                  "id": "qa-valid-1-2-2",
+                  "title": "本文的分析路径",
+                  "level": 3,
+                  "objective": "交代后文的推理路径。",
+                  "targetWords": 150,
+                  "citationIds": [],
+                  "children": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "qa-valid-2",
+          "title": "分析与讨论",
+          "level": 1,
+          "objective": "基于前述框架展开分析并说明边界。",
+          "targetWords": 600,
+          "citationIds": [],
+          "children": [
+            {
+              "id": "qa-valid-2-1",
+              "title": "主要分析",
+              "level": 2,
+              "objective": "完成核心分析。",
+              "targetWords": 300,
+              "citationIds": [],
+              "children": [
+                {
+                  "id": "qa-valid-2-1-1",
+                  "title": "关键关系的解释",
+                  "level": 3,
+                  "objective": "解释关键关系。",
+                  "targetWords": 150,
+                  "citationIds": [],
+                  "children": []
+                },
+                {
+                  "id": "qa-valid-2-1-2",
+                  "title": "条件化结论",
+                  "level": 3,
+                  "objective": "给出有边界的局部结论。",
+                  "targetWords": 150,
+                  "citationIds": [],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "id": "qa-valid-2-2",
+              "title": "局限与后续方向",
+              "level": 2,
+              "objective": "说明当前材料的局限。",
+              "targetWords": 300,
+              "citationIds": [],
+              "children": [
+                {
+                  "id": "qa-valid-2-2-1",
+                  "title": "证据边界",
+                  "level": 3,
+                  "objective": "说明证据边界。",
+                  "targetWords": 150,
+                  "citationIds": [],
+                  "children": []
+                },
+                {
+                  "id": "qa-valid-2-2-2",
+                  "title": "后续验证方向",
+                  "level": 3,
+                  "objective": "提出后续验证方向。",
+                  "targetWords": 150,
+                  "citationIds": [],
+                  "children": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "incomplete-depth",
+      "label": "缺少三级论证单元",
+      "brief": {
+        "title": "质量接口层级反例",
+        "paperType": "研究论文",
+        "discipline": "文学",
+        "language": "zh-CN",
+        "targetWords": 600,
+        "requirements": "主要正文需要真实三级论证单元。",
+        "keywords": ["层级"]
+      },
+      "evidence": {
+        "hasRealData": false,
+        "available": ["literature"],
+        "description": "仅用于层级反例。"
+      },
+      "allowedCitationIds": [],
+      "expect": {
+        "passed": false,
+        "requiredIssueCodes": ["OUTLINE_DEPTH_INCOMPLETE"]
+      },
+      "outline": [
+        {
+          "id": "qa-incomplete-1",
+          "title": "只有二级的小节",
+          "level": 1,
+          "objective": "用于触发三级粒度检查。",
+          "targetWords": 600,
+          "citationIds": [],
+          "children": [
+            {
+              "id": "qa-incomplete-1-1",
+              "title": "没有继续展开",
+              "level": 2,
+              "objective": "该节点没有三级论证。",
+              "targetWords": 600,
+              "citationIds": [],
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "unclosed-word-budget",
+      "label": "父子字数预算不闭合",
+      "brief": {
+        "title": "质量接口字数反例",
+        "paperType": "研究论文",
+        "discipline": "教育",
+        "language": "zh-CN",
+        "targetWords": 1000,
+        "requirements": "父节点预算应等于直接子节点预算之和。",
+        "keywords": ["字数"]
+      },
+      "evidence": {
+        "hasRealData": false,
+        "available": ["literature"],
+        "description": "仅用于字数反例。"
+      },
+      "allowedCitationIds": [],
+      "expect": {
+        "passed": false,
+        "requiredIssueCodes": ["WORD_BUDGET_NOT_CLOSED"]
+      },
+      "outline": [
+        {
+          "id": "qa-budget-1",
+          "title": "预算不闭合章节",
+          "level": 1,
+          "objective": "用于触发字数检查。",
+          "targetWords": 1000,
+          "citationIds": [],
+          "children": [
+            {
+              "id": "qa-budget-1-1",
+              "title": "第一节",
+              "level": 2,
+              "objective": "第一节。",
+              "targetWords": 400,
+              "citationIds": [],
+              "children": [
+                {
+                  "id": "qa-budget-1-1-1",
+                  "title": "第一目",
+                  "level": 3,
+                  "objective": "第一目。",
+                  "targetWords": 100,
+                  "citationIds": [],
+                  "children": []
+                },
+                {
+                  "id": "qa-budget-1-1-2",
+                  "title": "第二目",
+                  "level": 3,
+                  "objective": "第二目。",
+                  "targetWords": 100,
+                  "citationIds": [],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "id": "qa-budget-1-2",
+              "title": "第二节",
+              "level": 2,
+              "objective": "第二节。",
+              "targetWords": 400,
+              "citationIds": [],
+              "children": [
+                {
+                  "id": "qa-budget-1-2-1",
+                  "title": "第三目",
+                  "level": 3,
+                  "objective": "第三目。",
+                  "targetWords": 100,
+                  "citationIds": [],
+                  "children": []
+                },
+                {
+                  "id": "qa-budget-1-2-2",
+                  "title": "第四目",
+                  "level": 3,
+                  "objective": "第四目。",
+                  "targetWords": 100,
+                  "citationIds": [],
+                  "children": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "duplicate-title",
+      "label": "重复标题（同名）",
+      "brief": {
+        "title": "质量接口标题反例",
+        "paperType": "研究论文",
+        "discipline": "法学",
+        "language": "zh-CN",
+        "targetWords": 1200,
+        "requirements": "不得用同义标题凑三级数量。",
+        "keywords": ["标题"]
+      },
+      "evidence": {
+        "hasRealData": false,
+        "available": ["literature", "case-material"],
+        "description": "仅用于重复标题反例。"
+      },
+      "allowedCitationIds": [],
+      "expect": {
+        "passed": false,
+        "requiredIssueCodes": ["DUPLICATE_OUTLINE_TITLE"]
+      },
+      "outline": [
+        {
+          "id": "qa-duplicate-1",
+          "title": "制度分析",
+          "level": 1,
+          "objective": "用于触发重复标题检查。",
+          "targetWords": 1200,
+          "citationIds": [],
+          "children": [
+            {
+              "id": "qa-duplicate-1-1",
+              "title": "制度分析",
+              "level": 2,
+              "objective": "与父标题重复。",
+              "targetWords": 600,
+              "citationIds": [],
+              "children": [
+                {
+                  "id": "qa-duplicate-1-1-1",
+                  "title": "制度分析",
+                  "level": 3,
+                  "objective": "与上级标题重复。",
+                  "targetWords": 300,
+                  "citationIds": [],
+                  "children": []
+                },
+                {
+                  "id": "qa-duplicate-1-1-2",
+                  "title": "争议边界",
+                  "level": 3,
+                  "objective": "说明争议边界。",
+                  "targetWords": 300,
+                  "citationIds": [],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "id": "qa-duplicate-1-2",
+              "title": "比较分析",
+              "level": 2,
+              "objective": "说明比较维度。",
+              "targetWords": 600,
+              "citationIds": [],
+              "children": [
+                {
+                  "id": "qa-duplicate-1-2-1",
+                  "title": "比较对象",
+                  "level": 3,
+                  "objective": "说明比较对象。",
+                  "targetWords": 300,
+                  "citationIds": [],
+                  "children": []
+                },
+                {
+                  "id": "qa-duplicate-1-2-2",
+                  "title": "比较结论",
+                  "level": 3,
+                  "objective": "说明比较结论。",
+                  "targetWords": 300,
+                  "citationIds": [],
+                  "children": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "citation-not-whitelisted",
+      "label": "引用 ID 越权",
+      "brief": {
+        "title": "质量接口引用反例",
+        "paperType": "研究论文",
+        "discipline": "管理",
+        "language": "zh-CN",
+        "targetWords": 1200,
+        "requirements": "只允许引用本次传入的白名单 ID。",
+        "keywords": ["引用"]
+      },
+      "evidence": {
+        "hasRealData": false,
+        "available": ["literature"],
+        "description": "仅用于引用白名单反例。"
+      },
+      "allowedCitationIds": ["qa-ref-allowed"],
+      "expect": {
+        "passed": false,
+        "requiredIssueCodes": ["UNMAPPED_CITATION"]
+      },
+      "outline": [
+        {
+          "id": "qa-citation-1",
+          "title": "引用白名单检查",
+          "level": 1,
+          "objective": "用于触发引用 ID 检查。",
+          "targetWords": 1200,
+          "citationIds": ["qa-ref-forbidden"],
+          "children": [
+            {
+              "id": "qa-citation-1-1",
+              "title": "引用范围",
+              "level": 2,
+              "objective": "说明引用范围。",
+              "targetWords": 600,
+              "citationIds": [],
+              "children": [
+                {
+                  "id": "qa-citation-1-1-1",
+                  "title": "允许的文献",
+                  "level": 3,
+                  "objective": "说明允许的文献。",
+                  "targetWords": 300,
+                  "citationIds": ["qa-ref-allowed"],
+                  "children": []
+                },
+                {
+                  "id": "qa-citation-1-1-2",
+                  "title": "未映射的文献",
+                  "level": 3,
+                  "objective": "该节点引用未在白名单中的 ID。",
+                  "targetWords": 300,
+                  "citationIds": ["qa-ref-forbidden"],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "id": "qa-citation-1-2",
+              "title": "证据边界",
+              "level": 2,
+              "objective": "说明证据边界。",
+              "targetWords": 600,
+              "citationIds": [],
+              "children": [
+                {
+                  "id": "qa-citation-1-2-1",
+                  "title": "引用核对",
+                  "level": 3,
+                  "objective": "说明引用核对。",
+                  "targetWords": 300,
+                  "citationIds": [],
+                  "children": []
+                },
+                {
+                  "id": "qa-citation-1-2-2",
+                  "title": "未核验项",
+                  "level": 3,
+                  "objective": "说明未核验项。",
+                  "targetWords": 300,
+                  "citationIds": [],
+                  "children": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "result-without-data",
+      "label": "无真实数据却承诺实测结果",
+      "brief": {
+        "title": "质量接口结果边界反例",
+        "paperType": "研究论文",
+        "discipline": "教育/管理（跨学科）",
+        "language": "zh-CN",
+        "targetWords": 1200,
+        "requirements": "没有问卷或实验数据时不得生成实证结果。",
+        "keywords": ["结果边界"]
+      },
+      "evidence": {
+        "hasRealData": false,
+        "available": ["literature", "analysis"],
+        "description": "明确没有真实数据，用于检验结果数据边界。"
+      },
+      "allowedCitationIds": [],
+      "expect": {
+        "passed": false,
+        "requiredIssueCodes": ["RESULT_WITHOUT_DATA"]
+      },
+      "outline": [
+        {
+          "id": "qa-result-1",
+          "title": "研究设计与结果",
+          "level": 1,
+          "objective": "该标题故意承诺不存在的实证结果。",
+          "targetWords": 1200,
+          "citationIds": [],
+          "role": "results",
+          "children": [
+            {
+              "id": "qa-result-1-1",
+              "title": "问卷样本与统计结果",
+              "level": 2,
+              "objective": "该标题故意引入不存在的样本和统计结果。",
+              "targetWords": 600,
+              "citationIds": [],
+              "role": "results",
+              "children": [
+                {
+                  "id": "qa-result-1-1-1",
+                  "title": "显著性检验与效果量",
+                  "level": 3,
+                  "objective": "该标题故意引入不存在的统计量。",
+                  "targetWords": 300,
+                  "citationIds": [],
+                  "role": "results",
+                  "evidenceNeeds": ["project-data"],
+                  "children": []
+                },
+                {
+                  "id": "qa-result-1-1-2",
+                  "title": "回归系数与实测结论",
+                  "level": 3,
+                  "objective": "该标题故意引入不存在的结果。",
+                  "targetWords": 300,
+                  "citationIds": [],
+                  "role": "results",
+                  "evidenceNeeds": ["project-data"],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "id": "qa-result-1-2",
+              "title": "结果讨论",
+              "level": 2,
+              "objective": "该标题故意延续不存在的结果。",
+              "targetWords": 600,
+              "citationIds": [],
+              "role": "discussion",
+              "children": [
+                {
+                  "id": "qa-result-1-2-1",
+                  "title": "效果提升结论",
+                  "level": 3,
+                  "objective": "该标题故意声称效果提升。",
+                  "targetWords": 300,
+                  "citationIds": [],
+                  "children": []
+                },
+                {
+                  "id": "qa-result-1-2-2",
+                  "title": "推广效果",
+                  "level": 3,
+                  "objective": "该标题故意声称可推广效果。",
+                  "targetWords": 300,
+                  "citationIds": [],
+                  "children": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

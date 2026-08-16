@@ -92,7 +92,10 @@ import type {
   McpServerConfig,
   ManuscriptSection,
   ManuscriptSectionVersion,
+  OutlineArchitecture,
   OutlineNode,
+  OutlineQualityReport,
+  PaperStructurePattern,
   ProviderProtocol,
   ProviderProfile,
   ResearchBrief,
@@ -112,6 +115,7 @@ import {
 import { isNativeBridge, paperAgent } from './fallback'
 import { AppearanceSettingsPage } from './AppearanceSettingsPage'
 import { MessageLiteratureActions } from './MessageLiteratureActions'
+import { OutlineArchitectureSummary } from './OutlineArchitectureSummary'
 import { OutlineTree } from './OutlineTree'
 
 type Route = 'workspace' | 'library' | 'skills' | 'settings'
@@ -164,6 +168,15 @@ const projectStatusLabels: Record<string, string> = {
   stopped: '已停止',
 }
 
+const outlinePatternLabels: Record<PaperStructurePattern, string> = {
+  'empirical-imrad': '实证研究 / IMRaD',
+  'system-engineering': '系统设计 / 工程实现',
+  'thematic-review': '主题式文献综述',
+  'theoretical-normative': '理论 / 规范分析',
+  'case-study': '案例研究',
+  'policy-management': '政策 / 管理研究',
+}
+
 const emptyWorkspace: WorkspaceState = {
   schemaVersion: 1,
   projects: [],
@@ -173,6 +186,8 @@ const emptyWorkspace: WorkspaceState = {
   providers: [],
   literature: [],
   outlines: {},
+  outlineArchitectures: {},
+  outlineQualityReports: {},
   sections: [],
   sectionVersions: [],
   citations: [],
@@ -2814,6 +2829,8 @@ function RightWorkspace({
   onTab,
   literature,
   outline,
+  outlineArchitecture,
+  outlineQualityReport,
   sections,
   sectionVersions,
   selectedSectionId,
@@ -2829,6 +2846,7 @@ function RightWorkspace({
   canGenerateOutline,
   generatingOutline,
   onGenerateOutline,
+  onRequestRegenerateOutline,
   onConfigureModel,
   onRefresh,
   onCloseDrawer,
@@ -2840,6 +2858,8 @@ function RightWorkspace({
   onTab: (tab: RightTab) => void
   literature: LiteratureRecord[]
   outline: WorkspaceState['outlines'][string]
+  outlineArchitecture?: OutlineArchitecture
+  outlineQualityReport?: OutlineQualityReport
   sections: ManuscriptSection[]
   sectionVersions: ManuscriptSectionVersion[]
   selectedSectionId?: string
@@ -2855,6 +2875,7 @@ function RightWorkspace({
   canGenerateOutline: boolean
   generatingOutline: boolean
   onGenerateOutline: () => void
+  onRequestRegenerateOutline: () => void
   onConfigureModel: () => void
   onRefresh: () => void
   onCloseDrawer: () => void
@@ -3002,8 +3023,23 @@ function RightWorkspace({
         {tab === 'drafts' && (
           <div className="draft-panel">
             <div className="panel-section-heading">
-              <strong>论文大纲</strong>
-              <span>{outlineSummary[1]} 章 · {outlineSummary[2]} 节 · {outlineSummary[3]} 目</span>
+              <div className="panel-section-heading-copy">
+                <strong>论文大纲</strong>
+                <span>{outlineSummary[1]} 章 · {outlineSummary[2]} 节 · {outlineSummary[3]} 目</span>
+              </div>
+              {outlineNodes.length > 0 && (
+                <button
+                  type="button"
+                  className="outline-regenerate-button"
+                  onClick={onRequestRegenerateOutline}
+                  disabled={generatingOutline}
+                  aria-busy={generatingOutline}
+                  title={generatingOutline ? '正在生成大纲' : '重新生成大纲'}
+                >
+                  {generatingOutline ? <LoaderCircle size={14} className="spin" aria-hidden="true" /> : <RefreshCw size={14} aria-hidden="true" />}
+                  <span>{generatingOutline ? '正在生成' : '重新生成'}</span>
+                </button>
+              )}
             </div>
             {outlineNodes.length === 0 && (
               <EmptyState
@@ -3021,13 +3057,29 @@ function RightWorkspace({
               />
             )}
             {outlineNodes.length > 0 && (
-              <OutlineTree
-                nodes={outlineNodes}
-                sections={sections}
-                sectionVersions={sectionVersions}
-                selectedSectionId={selectedSectionId}
-                onSelectSection={onSelectSection}
-              />
+              <>
+                {outlineArchitecture && (
+                  <OutlineArchitectureSummary
+                    structureMode={outlinePatternLabels[outlineArchitecture.pattern]}
+                    discipline={outlineArchitecture.disciplineLabel}
+                    researchDirection={outlineArchitecture.researchDirection}
+                    confidence={outlineArchitecture.confidence}
+                    totalWords={outlineArchitecture.totalTargetWords}
+                    topLevelChapterCount={outlineNodes.length}
+                    qualityIssues={(outlineQualityReport?.issues ?? [])
+                      .filter((issue) => issue.severity !== 'info')
+                      .map((issue) => issue.message)}
+                    defaultExpanded={false}
+                  />
+                )}
+                <OutlineTree
+                  nodes={outlineNodes}
+                  sections={sections}
+                  sectionVersions={sectionVersions}
+                  selectedSectionId={selectedSectionId}
+                  onSelectSection={onSelectSection}
+                />
+              </>
             )}
             <div className="panel-section-heading artifacts-heading">
               <strong>导出产物</strong>
@@ -3080,6 +3132,115 @@ function RightWorkspace({
         )}
       </div>
     </aside>
+  )
+}
+
+function RegenerateOutlineDialog({
+  open,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean
+  busy: boolean
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const dialogRef = useRef<HTMLElement>(null)
+  const cancelButtonRef = useRef<HTMLButtonElement>(null)
+  const previousFocusRef = useRef<HTMLElement | null>(null)
+  const busyRef = useRef(busy)
+  const onCloseRef = useRef(onClose)
+  busyRef.current = busy
+  onCloseRef.current = onClose
+
+  useEffect(() => {
+    if (!open) return
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const focusFrame = window.requestAnimationFrame(() => cancelButtonRef.current?.focus())
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (!busyRef.current) {
+          event.preventDefault()
+          onCloseRef.current()
+        }
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      )
+      if (focusable.length === 0) {
+        event.preventDefault()
+        dialogRef.current?.focus()
+        return
+      }
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.cancelAnimationFrame(focusFrame)
+      window.removeEventListener('keydown', onKeyDown)
+      previousFocusRef.current?.focus()
+    }
+  }, [open])
+
+  if (!open) return null
+
+  return (
+    <div
+      className="modal-backdrop"
+      role="presentation"
+      onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}
+    >
+      <section
+        ref={dialogRef}
+        tabIndex={-1}
+        className="modal regenerate-outline-modal"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="regenerate-outline-title"
+        aria-describedby="regenerate-outline-description"
+      >
+        <header className="modal-header">
+          <div>
+            <span className="modal-icon"><RefreshCw size={18} /></span>
+            <div>
+              <h2 id="regenerate-outline-title">重新生成论文大纲？</h2>
+              <p id="regenerate-outline-description">当前大纲将交由模型重新规划，生成后会替换现有的大纲结构。</p>
+            </div>
+          </div>
+          <IconButton icon={X} label="关闭" onClick={onClose} disabled={busy} />
+        </header>
+        <div className="regenerate-outline-body">
+          <div className="regenerate-outline-warning">
+            <CircleAlert size={17} aria-hidden="true" />
+            <div>
+              <strong>已有章节正文会受到保护</strong>
+              <p>已有正文的章节及其层级会保留，模型只重新规划可安全替换的未生成部分；若模型无法保持这些章节，应用会拒绝替换，旧大纲不变。</p>
+            </div>
+          </div>
+          <p className="regenerate-outline-note">重新生成可能带来不同的章节组织方式；确认前请先检查当前项目是否已有正文。</p>
+        </div>
+        <footer className="modal-footer">
+          <button ref={cancelButtonRef} type="button" className="secondary-button" onClick={onClose} disabled={busy}>取消</button>
+          <button type="button" className="primary-button compact" onClick={onConfirm} disabled={busy} aria-busy={busy}>
+            {busy ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />}
+            {busy ? '正在生成大纲' : '确认重新生成'}
+          </button>
+        </footer>
+      </section>
+    </div>
   )
 }
 
@@ -4921,6 +5082,7 @@ export function App() {
   const [selectingSectionVersionId, setSelectingSectionVersionId] = useState<string>()
   const [sectionGenerationCandidate, setSectionGenerationCandidate] = useState<SectionGenerationCandidate>()
   const [generatingOutline, setGeneratingOutline] = useState(false)
+  const [regenerateOutlineOpen, setRegenerateOutlineOpen] = useState(false)
   const [exporting, setExporting] = useState<'md' | 'docx'>()
   const [permissionCenterOpen, setPermissionCenterOpen] = useState(false)
   const [systemPermissions, setSystemPermissions] = useState<SystemPermissionSnapshot>()
@@ -5072,6 +5234,12 @@ export function App() {
   // 右侧文献栏和消息“已添加”状态必须严格限定当前项目，不能被其他项目的同题文献污染。
   const projectLiterature = workspace.literature.filter((item) => item.projectId === activeProject?.id)
   const outline = activeProject ? workspace.outlines[activeProject.id] ?? [] : []
+  const outlineArchitecture = activeProject
+    ? workspace.outlineArchitectures?.[activeProject.id]
+    : undefined
+  const outlineQualityReport = activeProject
+    ? workspace.outlineQualityReports?.[activeProject.id]
+    : undefined
   const sections = workspace.sections.filter((item) => item.projectId === activeProject?.id)
   const projectSectionVersions = workspace.sectionVersions.filter((item) => item.projectId === activeProject?.id)
   const selectedSection = sections.find((item) => item.id === selectedSectionId) ?? sections.find((item) => item.id === activeProject?.activeSectionId) ?? sections[0]
@@ -5635,6 +5803,7 @@ export function App() {
 
   const generateOutline = async () => {
     if (!activeProject) return
+    if (generatingOutline) return
     if (!activeProviderId || !activeModel) {
       showToast('请先配置并选择可用模型', 'error')
       return
@@ -5858,6 +6027,8 @@ export function App() {
               onTab={setRightTab}
               literature={projectLiterature}
               outline={outline}
+              outlineArchitecture={outlineArchitecture}
+              outlineQualityReport={outlineQualityReport}
               sections={sections}
               sectionVersions={projectSectionVersions}
               selectedSectionId={selectedSection?.id}
@@ -5873,6 +6044,7 @@ export function App() {
               canGenerateOutline={Boolean(activeProviderId && activeModel)}
               generatingOutline={generatingOutline}
               onGenerateOutline={generateOutline}
+              onRequestRegenerateOutline={() => setRegenerateOutlineOpen(true)}
               onConfigureModel={() => openSettings('configuration')}
               onRefresh={() => {
                 refreshWorkspace().catch((error) => {
@@ -5943,6 +6115,15 @@ export function App() {
       )}
 
       <NewProjectDialog open={newProjectOpen} busy={creatingProject} onClose={() => setNewProjectOpen(false)} onCreate={createProject} />
+      <RegenerateOutlineDialog
+        open={regenerateOutlineOpen}
+        busy={generatingOutline}
+        onClose={() => !generatingOutline && setRegenerateOutlineOpen(false)}
+        onConfirm={() => {
+          setRegenerateOutlineOpen(false)
+          void generateOutline()
+        }}
+      />
       <DeleteProjectDialog
         project={projectPendingDeletion}
         busy={deletingProject}

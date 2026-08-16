@@ -14,7 +14,9 @@ import type {
   McpServerConfig,
   ManuscriptSection,
   ManuscriptSectionVersion,
+  OutlineArchitecture,
   OutlineNode,
+  OutlineQualityReport,
   Project,
   ProviderProfile,
   ResearchBrief,
@@ -496,6 +498,8 @@ function demoState(): WorkspaceState {
         },
       ],
     },
+    outlineArchitectures: {},
+    outlineQualityReports: {},
     sections: [],
     sectionVersions: [],
     citations: [],
@@ -540,6 +544,8 @@ function normalizeState(candidate: Partial<WorkspaceState>): WorkspaceState {
     providers: candidate.providers ?? [],
     literature: candidate.literature ?? base.literature,
     outlines: candidate.outlines ?? base.outlines,
+    outlineArchitectures: candidate.outlineArchitectures ?? {},
+    outlineQualityReports: candidate.outlineQualityReports ?? {},
     sections: candidate.sections ?? [],
     sectionVersions: Array.isArray(candidate.sectionVersions) ? candidate.sectionVersions : [],
     citations: candidate.citations ?? [],
@@ -682,6 +688,10 @@ export class WorkspaceRepository {
       state.projects.unshift(project)
       state.conversations.unshift(conversation)
       state.outlines[projectId] = []
+      state.outlineArchitectures ??= {}
+      state.outlineQualityReports ??= {}
+      delete state.outlineArchitectures[projectId]
+      delete state.outlineQualityReports[projectId]
       state.settings.activeProjectId = projectId
       state.settings.sidebarExpandedProjectIds = [
         projectId,
@@ -977,6 +987,8 @@ export class WorkspaceRepository {
       state.runs = state.runs.filter((item) => item.projectId !== projectId)
       state.artifacts = state.artifacts.filter((item) => item.projectId !== projectId)
       delete state.outlines[projectId]
+      delete state.outlineArchitectures?.[projectId]
+      delete state.outlineQualityReports?.[projectId]
       state.settings.sidebarExpandedProjectIds = (
         state.settings.sidebarExpandedProjectIds ?? []
       ).filter((id) => id !== projectId)
@@ -1280,13 +1292,149 @@ export class WorkspaceRepository {
     })
   }
 
-  async saveOutline(projectId: string, outline: OutlineNode[]): Promise<OutlineNode[]> {
+  async saveOutline(
+    projectId: string,
+    outline: OutlineNode[],
+    architecture?: OutlineArchitecture,
+    qualityReport?: OutlineQualityReport,
+  ): Promise<OutlineNode[]> {
     return this.mutate((state) => {
       const project = state.projects.find((item) => item.id === projectId)
       if (!project) throw new Error('项目不存在或已经被移除。')
       state.outlines[projectId] = outline
+      if (architecture) {
+        state.outlineArchitectures ??= {}
+        state.outlineArchitectures[projectId] = architecture
+      }
+      if (qualityReport) {
+        state.outlineQualityReports ??= {}
+        state.outlineQualityReports[projectId] = qualityReport
+      }
       project.status = 'outline-review'
       project.updatedAt = now()
+      return outline
+    })
+  }
+
+  /** 原子提交模型生成的大纲；保留已有正文节点，仅替换可安全调整的空白章节。 */
+  async commitGeneratedOutline(
+    projectId: string,
+    outline: OutlineNode[],
+    architecture: OutlineArchitecture,
+    qualityReport: OutlineQualityReport,
+  ): Promise<OutlineNode[]> {
+    return this.mutate((state) => {
+      const project = state.projects.find((item) => item.id === projectId)
+      if (!project) throw new Error('项目不存在或已经被移除。')
+
+      const replacingExisting = (state.outlines[projectId] ?? []).length > 0
+      const projectSections = state.sections.filter((section) => section.projectId === projectId)
+      const newNodes = new Map<string, OutlineNode>()
+      const parentByNodeId = new Map<string, string | undefined>()
+      const flatten = (nodes: OutlineNode[], parentId?: string) => {
+        for (const node of nodes) {
+          newNodes.set(node.id, node)
+          parentByNodeId.set(node.id, parentId)
+          flatten(node.children, node.id)
+        }
+      }
+      flatten(outline)
+
+      const oldParentByNodeId = new Map<string, string | undefined>()
+      const flattenOld = (nodes: OutlineNode[], parentId?: string) => {
+        for (const node of nodes) {
+          oldParentByNodeId.set(node.id, parentId)
+          flattenOld(node.children, node.id)
+        }
+      }
+      flattenOld(state.outlines[projectId] ?? [])
+
+      const versionSectionIds = new Set(
+        state.sectionVersions.filter((version) => version.projectId === projectId).map((version) => version.sectionId),
+      )
+      const citationSectionIds = new Set(
+        state.citations.filter((citation) => citation.projectId === projectId).map((citation) => citation.sectionId),
+      )
+      const protectedSections = projectSections.filter((section) => (
+        Boolean(section.content.trim())
+        || section.status !== 'pending'
+        || versionSectionIds.has(section.id)
+        || citationSectionIds.has(section.id)
+      ))
+
+      if (replacingExisting) {
+        const unsafe = protectedSections.find((section) => {
+          const next = newNodes.get(section.outlineNodeId)
+          return !next
+            || next.title.normalize('NFKC').trim() !== section.title.normalize('NFKC').trim()
+            || next.level !== section.level
+            || parentByNodeId.get(section.outlineNodeId) !== oldParentByNodeId.get(section.outlineNodeId)
+        })
+        if (unsafe) {
+          throw new Error(`新大纲未能安全保留已有正文对应的章节“${unsafe.title}”，旧大纲已保持不变。`)
+        }
+
+        const protectedSectionIds = new Set(protectedSections.map((section) => section.id))
+        const removedSectionIds = new Set(
+          projectSections
+            .filter((section) => !newNodes.has(section.outlineNodeId) && !protectedSectionIds.has(section.id))
+            .map((section) => section.id),
+        )
+        state.sections = state.sections.filter((section) => !removedSectionIds.has(section.id))
+        state.sectionVersions = state.sectionVersions.filter((version) => !removedSectionIds.has(version.sectionId))
+        state.citations = state.citations.filter((citation) => !removedSectionIds.has(citation.sectionId))
+      }
+
+      state.outlines[projectId] = outline
+      state.outlineArchitectures ??= {}
+      state.outlineArchitectures[projectId] = architecture
+      state.outlineQualityReports ??= {}
+      state.outlineQualityReports[projectId] = qualityReport
+
+      const timestamp = now()
+      const flattened: OutlineNode[] = []
+      const visit = (nodes: OutlineNode[]) => {
+        for (const node of nodes) {
+          flattened.push(node)
+          visit(node.children)
+        }
+      }
+      visit(outline)
+
+      const existing = state.sections.filter((section) => section.projectId === projectId)
+      const created = flattened.map((node) => {
+        const current = existing.find((section) => section.outlineNodeId === node.id)
+        if (current) {
+          if (!protectedSections.some((section) => section.id === current.id)) {
+            current.title = node.title
+            current.level = node.level
+            current.updatedAt = timestamp
+          }
+          return current
+        }
+        const section: ManuscriptSection = {
+          ...createLiveEntityBase(),
+          projectId,
+          outlineNodeId: node.id,
+          title: node.title,
+          level: node.level,
+          content: '',
+          status: 'pending',
+          wordCount: 0,
+          version: 1,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }
+        state.sections.push(section)
+        return section
+      })
+      synchronizeDerivedSections(state, projectId, timestamp)
+
+      if (!project.activeSectionId || !created.some((section) => section.id === project.activeSectionId)) {
+        project.activeSectionId = created[0]?.id
+      }
+      project.status = 'outline-review'
+      project.updatedAt = timestamp
       return outline
     })
   }

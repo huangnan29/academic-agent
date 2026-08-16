@@ -468,4 +468,14 @@
 - 类型检查、生产构建和 `.app` 打包通过；打包与安装副本均包含可执行的原生语音组件及两项用途说明。最终 `/Applications/学术 Agent.app` 与构建产物 `app.asar` SHA-256 均为 `503e9d755ed7af3ed64a60be74e637abbc85559f0f7864af4e53c8f3f7868a3d`，安装副本已重新启动并启用 renderer 沙箱。
 - 边界：本机 Speech 授权尚未在 macOS 弹窗中确认，因此真实说话转写需要用户首次点击新版麦克风后选择允许并人工确认；本轮验证原生编译、状态、桥接、打包资源和安装一致性，不把未进行的口述测试写成通过。
 
+## 32. 专业感知三级大纲原生验收（2026-08-15）
+
+- 使用最终打包的 Apple Silicon `.app` 和隔离 `user-data-dir`，不读取或修改用户正式工作区。
+- 真实创建题目“生成式人工智能赋能高校教学的作用机制研究”，通过正式 `outline:save` IPC 保存 4 章、8 节、16 目的三级大纲；重启后结构架构与质量报告仍可读取。
+- 主进程识别为“教育 × 管理 / 经济”交叉专业和“政策 / 管理研究”结构，匹配度 88%；因项目明确没有问卷、访谈或实验数据，未生成实证结果结构。
+- 右侧摘要收起态保持紧凑；展开态使用两列信息、置信度进度和质量状态，在 320–620px 工作台宽度内没有竖排、遮挡或裁切。
+- 证据：`output/native-outline-architecture-final/outline-architecture-summary.png`、`output/native-outline-architecture-final/outline-architecture-details.png`、`output/native-outline-architecture-final/outline-architecture-summary.json`。
+- 最终 `/Applications/学术 Agent.app` 与打包产物的 `app.asar` SHA-256 均为 `0dd9dcdcc06bc6a9c8d44d76f7a56b6e4bd3f0c7dab7b32d6b41d42102bc71e1`，安装副本已使用新进程重新启动。
+- 边界：该原生大纲为验收脚本提供的合规结构，用来验证分类、IPC、持久化、质量检查和 UI；没有冒充真实模型生成。8 个固定题目的真实模型目录盲评仍未验证。
+
 final result: passed

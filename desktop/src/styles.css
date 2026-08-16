@@ -3319,18 +3319,67 @@ body.is-resizing-panel {
 
 .panel-section-heading {
   display: flex;
+  min-width: 0;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   padding: 4px 3px 9px;
 }
 
-.panel-section-heading strong {
+.panel-section-heading-copy {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.panel-section-heading-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: calc(11px * var(--ui-font-scale, 1));
 }
 
-.panel-section-heading span {
+.panel-section-heading > strong {
+  font-size: calc(11px * var(--ui-font-scale, 1));
+}
+
+.panel-section-heading-copy span {
+  flex: 0 0 auto;
   color: var(--text-muted);
   font-size: calc(9px * var(--ui-font-scale, 1));
+}
+
+.panel-section-heading > span {
+  color: var(--text-muted);
+  font-size: calc(9px * var(--ui-font-scale, 1));
+}
+
+.outline-regenerate-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 27px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: transparent;
+  font-size: calc(10px * var(--ui-font-scale, 1));
+  font-weight: 560;
+  white-space: nowrap;
+}
+
+.outline-regenerate-button:hover:not(:disabled) {
+  border-color: var(--border);
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.outline-regenerate-button:disabled {
+  color: var(--brand);
+  background: var(--brand-soft);
 }
 
 .outline-row,
@@ -4888,6 +4937,50 @@ body.is-resizing-panel {
 
 .delete-project-modal {
   width: min(520px, calc(100vw - 52px));
+}
+
+.regenerate-outline-modal {
+  width: min(540px, calc(100vw - 52px));
+}
+
+.regenerate-outline-body {
+  display: grid;
+  gap: 13px;
+  padding: 19px 22px 20px;
+}
+
+.regenerate-outline-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 8px;
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.regenerate-outline-warning > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.regenerate-outline-warning strong {
+  display: block;
+  color: var(--text);
+  font-size: calc(12px * var(--ui-font-scale, 1));
+}
+
+.regenerate-outline-warning p,
+.regenerate-outline-note {
+  margin: 5px 0 0;
+  color: var(--text-secondary);
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  line-height: 1.55;
+}
+
+.regenerate-outline-note {
+  margin: 0;
+  color: var(--text-muted);
 }
 
 .delete-project-modal .modal-header > div:first-child > div {

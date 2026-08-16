@@ -386,6 +386,74 @@ export interface LiteratureSearchInput {
   }
 }
 
+/** 论文所属的主学科族，用于选择结构模式而不是直接决定章节标题。 */
+export type DisciplineFamily =
+  | 'literature-language'
+  | 'science'
+  | 'engineering'
+  | 'law'
+  | 'design-art'
+  | 'management-economics'
+  | 'education'
+  | 'medicine-health'
+  | 'interdisciplinary'
+  | 'unknown'
+
+/** 可复用的论文结构模式；学科与模式是多对多关系。 */
+export type PaperStructurePattern =
+  | 'empirical-imrad'
+  | 'system-engineering'
+  | 'thematic-review'
+  | 'theoretical-normative'
+  | 'case-study'
+  | 'policy-management'
+
+export type OutlineEvidenceNeed = 'literature' | 'project-data' | 'case-material' | 'analysis'
+export type OutlineContentForm = 'prose' | 'table' | 'diagram' | 'formula' | 'code'
+
+/** 大纲生成前的结构决策快照，供界面解释和后续章节生成复用。 */
+export interface OutlineArchitecture {
+  projectId: string
+  disciplineFamily: DisciplineFamily
+  disciplineLabel: string
+  researchDirection: string
+  researchObject: string
+  researchAction: string
+  scope: string
+  pattern: PaperStructurePattern
+  confidence: number
+  alternatives: PaperStructurePattern[]
+  rationale: string
+  researchQuestions: string[]
+  narrativeFlow: string[]
+  totalTargetWords: number
+  dataAvailable: boolean
+  generatedAt: string
+}
+
+export interface OutlineQualityIssue {
+  code: string
+  severity: 'error' | 'warning' | 'info'
+  message: string
+  nodeId?: string
+}
+
+/** 三级大纲的确定性质量检查结果，不使用模型自评分。 */
+export interface OutlineQualityReport {
+  passed: boolean
+  score: number
+  issues: OutlineQualityIssue[]
+  metrics: {
+    rootCount: number
+    nodeCount: number
+    leafCount: number
+    targetWords: number
+    allocatedWords: number
+    allocationRatio: number
+    citationCount: number
+  }
+}
+
 export interface OutlineNode {
   id: string
   title: string
@@ -394,6 +462,18 @@ export interface OutlineNode {
   targetWords: number
   citationIds: string[]
   children: OutlineNode[]
+  /** 当前节点回答哪些研究问题；旧工作区可缺省。 */
+  servesResearchQuestions?: string[]
+  /** 本节点在整篇论文论证链中的作用。 */
+  role?: string
+  /** 需要在正文中完成的关键主张，而不是预设结论。 */
+  keyClaims?: string[]
+  /** 完成该节点所需的证据类型。 */
+  evidenceNeeds?: OutlineEvidenceNeed[]
+  /** 适合该节点的内容形态，仅作生成建议。 */
+  contentForms?: OutlineContentForm[]
+  /** 与下一节点之间的衔接说明。 */
+  transition?: string
 }
 
 export interface ManuscriptSection extends BaseEntity {
@@ -562,6 +642,10 @@ export interface WorkspaceState {
   providers: ProviderProfile[]
   literature: LiteratureRecord[]
   outlines: Record<string, OutlineNode[]>
+  /** 按项目保存最近一次大纲结构决策；旧工作区由仓储层补空对象。 */
+  outlineArchitectures?: Record<string, OutlineArchitecture>
+  /** 按项目保存最近一次确定性大纲质量检查。 */
+  outlineQualityReports?: Record<string, OutlineQualityReport>
   sections: ManuscriptSection[]
   sectionVersions: ManuscriptSectionVersion[]
   citations: CitationEvidence[]

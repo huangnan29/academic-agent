@@ -3,6 +3,7 @@ import type {
   LiteratureRecord,
   ManuscriptSection,
   McpToolCallResult,
+  OutlineArchitecture,
   OutlineNode,
   Project,
   ResearchBrief,
@@ -46,6 +47,7 @@ export function buildOutlinePrompt(
   brief: ResearchBrief,
   literature: LiteratureRecord[] = [],
   skills: SkillDefinition[] = [],
+  architecture?: OutlineArchitecture,
 ): string {
   const sources = literature.filter((item) => item.included)
   const sourceText = sources.length
@@ -64,6 +66,21 @@ export function buildOutlinePrompt(
     `关键词：${brief.keywords.join('、') || '未指定'}`,
     `其他要求：${brief.requirements || '无'}`,
     '',
+    '## 已完成的结构路由',
+    architecture
+      ? [
+          `专业类别：${architecture.disciplineLabel}`,
+          `研究方向：${architecture.researchDirection}`,
+          `研究对象：${architecture.researchObject || '待在大纲中进一步界定'}`,
+          `研究动作：${architecture.researchAction}`,
+          `结构模式：${architecture.pattern}`,
+          `真实项目数据：${architecture.dataAvailable ? '项目要求声明存在，正文仍须逐项核验' : '未确认，不得设置承诺实证结果的章节'}`,
+          `结构理由：${architecture.rationale}`,
+          `研究问题：\n${architecture.researchQuestions.map((item, index) => `${index + 1}. ${item}`).join('\n')}`,
+          `叙事链：${architecture.narrativeFlow.join(' → ')}`,
+        ].join('\n')
+      : '未提供结构路由，请根据论文类型、学科、标题和证据条件选择最合适的结构。',
+    '',
     formatEnabledSkills(skills),
     '',
     '## 可用文献',
@@ -73,12 +90,16 @@ export function buildOutlinePrompt(
     '1. 结构必须围绕研究问题推进，避免“概念堆砌”和重复章节。',
     '2. citationIds 只能填写上方真实存在的文献 ID；证据不足时保持空数组。',
     '3. 不得虚构 DOI、页码、样本、实验、访谈、调查结果或检索成功状态。',
-    '4. 必须生成完整三级结构：一级章节的 children 为二级小节，二级小节的 children 为三级条目；只有三级条目的 children 为空。',
+    '4. 主要正文必须展开到三级论证单元；摘要、参考文献、致谢、附录等前后置部分不强制凑三级。内容不足以形成独立三级条目时应合并，禁止用近义标题填满层级。',
     '5. objective 必须说明该节解决的问题和预期论证内容，而不是复述标题。',
+    '6. 一级章节目标字数之和应接近全文目标；每个父节点的 targetWords 应与直接子节点之和基本闭合，不能重复计算预算。',
+    '7. servesResearchQuestions 只能引用上方研究问题原文；role 说明章节功能；keyClaims 是待论证主张而非预设结论。',
+    '8. evidenceNeeds 只能使用 literature、project-data、case-material、analysis；contentForms 只能使用 prose、table、diagram、formula、code。没有真实数据时，表图只能作为结构或方案表达，不能填造数值。',
+    '9. 标题必须体现当前专业的研究对象、方法和术语，不能套用与学科无关的通用目录。',
     '',
     '## 输出格式',
     '只输出合法 JSON，不要使用 Markdown 代码块或补充说明。JSON 顶层为数组：',
-    '[{"id":"chapter-1","title":"第一章 章节标题","level":1,"objective":"本章目标","targetWords":1200,"citationIds":[],"children":[{"id":"chapter-1-1","title":"1.1 二级小节","level":2,"objective":"本节目标","targetWords":600,"citationIds":[],"children":[{"id":"chapter-1-1-1","title":"1.1.1 三级条目","level":3,"objective":"本条目目标","targetWords":300,"citationIds":["文献ID"],"children":[]}]}]}]',
+    '[{"id":"chapter-1","title":"第一章 章节标题","level":1,"objective":"本章目标","targetWords":1200,"citationIds":[],"servesResearchQuestions":["研究问题原文"],"role":"本章在全文中的作用","keyClaims":["待论证主张"],"evidenceNeeds":["literature","analysis"],"contentForms":["prose","table"],"transition":"与下一章的衔接","children":[{"id":"chapter-1-1","title":"1.1 二级小节","level":2,"objective":"本节目标","targetWords":600,"citationIds":[],"servesResearchQuestions":["研究问题原文"],"role":"本节作用","keyClaims":["待论证主张"],"evidenceNeeds":["literature"],"contentForms":["prose"],"transition":"与下一节的衔接","children":[{"id":"chapter-1-1-1","title":"1.1.1 三级条目","level":3,"objective":"本条目目标","targetWords":300,"citationIds":["文献ID"],"servesResearchQuestions":["研究问题原文"],"role":"本条目作用","keyClaims":["待论证主张"],"evidenceNeeds":["literature","analysis"],"contentForms":["prose"],"transition":"","children":[]}]}]}]',
   ].join('\n')
 }
 

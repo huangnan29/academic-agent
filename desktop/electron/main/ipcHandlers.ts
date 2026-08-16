@@ -25,7 +25,11 @@ import {
 } from '../../shared/defaultMcp'
 import { LiteratureService } from '../services/literature'
 import { createProviderAdapter } from '../services/providers'
-import { sanitizeMcpText } from '../services/pipeline/context'
+import {
+  analyzeOutlineArchitecture,
+  runOutlineQualityChecks,
+  sanitizeMcpText,
+} from '../services/pipeline'
 import { WorkspaceRepository } from '../services/storage/workspaceRepository'
 import { ChatCoordinator, type ChatMcpToolPlan } from './chatCoordinator'
 import { extractConversationAttachment } from './attachments'
@@ -727,16 +731,26 @@ export function registerIpcHandlers(dependencies: IpcDependencies): void {
     assertId(projectId, '项目')
     const outline = outlineSchema.parse(payload)
     assertOutlineBounds(outline)
+    const state = repository.snapshot()
+    const project = state.projects.find((item) => item.id === projectId)
+    if (!project) throw new Error('项目不存在或已经被移除。')
+    const projectLiterature = state.literature.filter(
+      (item) => item.projectId === projectId && item.included && item.origin !== 'demo',
+    )
     const allowedCitationIds = new Set(
-      repository
-        .snapshot()
-        .literature.filter(
-          (item) => item.projectId === projectId && item.included && item.origin !== 'demo',
-        )
-        .map((item) => item.id),
+      projectLiterature.map((item) => item.id),
     )
     const sanitized = outline.map((node) => sanitizeOutlineNode(node, allowedCitationIds))
-    await repository.saveOutline(projectId, sanitized)
+    const architecture = state.outlineArchitectures?.[projectId] ?? {
+      ...analyzeOutlineArchitecture(project.brief, projectLiterature),
+      projectId,
+    }
+    const quality = runOutlineQualityChecks(sanitized, {
+      brief: project.brief,
+      architecture,
+      allowedCitationIds,
+    })
+    await repository.saveOutline(projectId, sanitized, architecture, quality)
     await repository.createSectionsFromOutline(projectId, sanitized)
     return sanitized
   })
@@ -1019,7 +1033,8 @@ function safeResearchFolderName(title: string): string {
 function assertOutlineBounds(outline: import('../../shared/contracts').OutlineNode[]): void {
   let count = 0
   const visit = (nodes: import('../../shared/contracts').OutlineNode[], depth: number) => {
-    if (depth > 3) throw new Error('提纲最多支持三级层级。')
+    // 三级叶节点的空 children 会以 depth=4 进入；只有实际存在第四级节点才应拒绝。
+    if (nodes.length > 0 && depth > 3) throw new Error('提纲最多支持三级层级。')
     for (const node of nodes) {
       count += 1
       if (count > 160) throw new Error('提纲节点数量超过安全上限。')
