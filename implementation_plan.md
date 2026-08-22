@@ -217,6 +217,7 @@ grid-template-columns:
 desktop/
 ├─ electron/
 │  ├─ main/
+│  │  └─ ipc/          # 按领域注册 IPC，共享可信 sender 与错误边界
 │  ├─ preload/
 │  └─ services/
 │     ├─ providers/
@@ -225,7 +226,13 @@ desktop/
 │     ├─ mcp/
 │     ├─ export/
 │     └─ storage/
-├─ src/              # React 工作台、样式和浏览器演示 fallback
+├─ src/
+│  ├─ hooks/          # 项目、聊天、稿件、文献、权限与外观控制器
+│  ├─ components/     # 交互组件；复杂领域使用 sidebar/、composer/ 子目录
+│  ├─ pages/          # 文献库、设置、Skills 等页面
+│  ├─ lib/            # 无副作用显示与格式化工具
+│  ├─ fallback/       # 浏览器演示状态、fixtures 与分领域 API
+│  └─ styles/         # 按级联顺序聚合的领域 CSS
 ├─ shared/
 ├─ build/
 ├─ qa/
@@ -240,6 +247,13 @@ desktop/
 - 文献/MCP agent：只修改文献源、去重、MCP 与相关主进程服务。
 
 任何共享契约变更先由主 agent 落盘，避免并行冲突。
+
+当前结构收口后的维护规则：
+
+- `App.tsx`、`ipcHandlers.ts`、`WorkspaceRepository`、`fallback.ts` 和各类 `index.ts` 均为组合入口，不接收新的完整业务流程。
+- 项目/会话、文献、稿件、MCP、权限、外观等新增逻辑进入已有领域模块；没有合适扩展点时先建立语义清晰的领域文件。
+- 入口/编排文件建议不超过 600 行，领域实现建议不超过 500 行；超过上级 `AGENTS.md` 门禁必须先拆分或记录合理例外。
+- 纯重构与功能更新分开实施，确保回归问题能够定位到结构变化或业务变化中的一种。
 
 ## 7. 开发顺序
 

@@ -46,6 +46,10 @@
 
 ## 开发
 
+当前代码按 Electron 进程边界和业务领域拆分：主进程 IPC 位于 `desktop/electron/main/ipc/`，工作区状态操作位于 `desktop/electron/services/storage/workspace-*.ts`，渲染层控制逻辑位于 `desktop/src/hooks/`，复杂侧栏、输入框和浏览器演示能力分别位于对应子目录。`App.tsx`、`ipcHandlers.ts`、`WorkspaceRepository` 与 `fallback.ts` 只作为组合入口。
+
+2026-08-21 至 2026-08-22 的更新为纯结构优化，没有新增用户可见功能，也没有改变工作区数据、IPC、模型/MCP 流程或版本号。长期代码规模、依赖方向和重构验收门禁见根目录 `AGENTS.md` 第 9 节。
+
 使用 Node 22 LTS：
 
 ```bash

@@ -1,0 +1,9 @@
+export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
+export const DEFAULT_MAX_LIST_PAGES = 100
+export const DEFAULT_MAX_CALL_ARGUMENTS_BYTES = 256 * 1_024
+export const DEFAULT_MAX_RESULT_BYTES = 8 * 1_024 * 1_024
+export const MAX_JSON_DEPTH = 64
+export const MAX_STDERR_LENGTH = 4_000
+export const CLIENT_INFO = { name: 'aiwritepaper-agent', version: '0.2.0' }
+export const MASKED_VALUE = '••••••••'
+export const SENSITIVE_NAME_PATTERN = /authorization|(?:^|[-_])auth(?:$|[-_])|api[-_]?key|access[-_]?key|token|secret|password|cookie|credential/i

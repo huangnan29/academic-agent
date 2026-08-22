@@ -1,5 +1,26 @@
 # 学术 Agent 开发日志
 
+## 2026-08-22：前端控制器与论文上下文继续拆分
+
+- 本轮继续遵守“只拆结构、不改行为”：`App.tsx` 从 1186 行降至 558 行，项目/对话、权限、外观、文献、聊天与稿件操作拆入 `src/hooks/`，顶层组件只保留跨域编排和布局。
+- `Sidebar.tsx` 从 821 行降至 215 行；项目树、项目/对话行、整理菜单、上下文菜单、重命名、排序派生数据和调宽交互拆入 `components/sidebar/`，原 DOM class、ARIA、菜单文案与拖拽/键盘行为保持不变。
+- `Composer.tsx` 从 657 行降至 325 行；Slash 菜单、能力引用标签、语音输入、附件/目标/计划菜单和目标对话框拆入 `components/composer/`，发送/停止、Enter/Shift+Enter、模型与权限行为保持不变。
+- 论文上下文入口从 624 行降至 400 行；Skills 注入与 MCP 不可信数据边界/敏感信息清洗分别迁入 `context-skills.ts`、`context-mcp.ts`，原公开导出和提示词内容保持不变。
+- 验证：TypeScript 类型检查、生产构建、项目生命周期、文献归属、父子稿同步、章节版本和项目上下文冒烟全部通过。
+- 原生 Electron 隔离工作区回归再次通过：阶段一 21 项交互、阶段二 4 项重启恢复均为 0 失败、0 运行时错误；证据保存于 `output/native-frontend-refactor-final/`。
+- 未验证边界：本轮没有调用真实模型、没有重新运行远程 MCP、没有生成新 DMG；这些能力的业务实现未改变。
+
+## 2026-08-21：后端与浏览器后备层结构收口
+
+- 本轮只做模块拆分，不改变公开 API、IPC 通道、工作区 JSON、错误文案或用户可见行为。
+- `WorkspaceRepository` 从 1800 行降至 457 行；新增 `workspace-state.ts`、`workspace-projects.ts`、`workspace-literature.ts`、`workspace-manuscript.ts`，分别承接迁移/规范化、项目会话、文献归属和稿件版本状态操作，原子写入仍由仓储入口统一负责。
+- `ipcHandlers.ts` 从 1059 行降至 33 行；新增 `electron/main/ipc/` 领域注册模块，保持 53 个 IPC 通道、可信发送者校验与 `registerIpcHandlers` 公开入口不变。
+- MCP 入口从 1179 行降至 532 行；配置校验、敏感字段脱敏、有界 JSON、传输创建、能力发现与错误类型拆为独立模块，`McpManager` 及其公开方法保持不变。
+- 浏览器演示后备层从约 1930 行单文件改为 39 行组合入口；演示数据、localStorage 迁移、项目/对话/文献/稿件/聊天/MCP/语音/外观等 API 按域拆分，不读取或影响正式安装版工作区。
+- 验证：TypeScript 类型检查与生产构建通过；项目生命周期、文献项目归属与永久删除、父子稿同步、章节版本、项目上下文、真实 arXiv MCP 冒烟全部通过，arXiv MCP 发现 14 个工具并完成两组真实检索。
+- 原生 Electron 隔离工作区回归：阶段一 21 项交互通过，阶段二 4 项退出重启恢复通过，两个阶段运行时错误均为 0。证据保存于 `output/native-structure-refactor-final/`。
+- 未验证边界：本轮没有消耗真实 DeepSeek/Anthropic 模型额度，没有重新执行远程 Streamable HTTP MCP，也没有生成新的 DMG；这些能力的实现未在本轮改变。
+
 ## 2026-08-16：结构整顿（App.tsx / styles.css 拆分与 qa 目录重组）
 
 - 纯结构重构，零业务逻辑与用户可见行为变更：`desktop/src/App.tsx` 从 6157 行拆为 1186 行主文件 + `lib/`（8 个工具模块）+ `components/`（13 个新组件文件）+ `pages/`（5 个新页面文件）；既有独立组件（OutlineTree、OutlineArchitectureSummary、MessageLiteratureActions、AppearanceSettingsPage）随目录约定迁移。

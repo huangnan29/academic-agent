@@ -1,564 +1,48 @@
 import { randomUUID } from 'node:crypto'
-import { homedir } from 'node:os'
-import { delimiter, join } from 'node:path'
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import type { McpServerConfig, McpServerInput } from '../../../shared/contracts.js'
+
+import { cloneBoundedJson } from './bounded-json.js'
+import { discover as discoverCapabilities, fetchResources, fetchTools } from './discovery.js'
+import { McpManagerError } from './errors.js'
 import {
-  getDefaultEnvironment,
-  StdioClientTransport,
-} from '@modelcontextprotocol/sdk/client/stdio.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+  describeConnectionError,
+  describeOperationError,
+  redactDiagnostic,
+} from './redaction.js'
+import { closeRuntime, createRuntime } from './transport.js'
 import type {
-  CallToolResult,
-  ReadResourceResult,
-} from '@modelcontextprotocol/sdk/types.js'
+  ManagedConnection,
+  McpManagerOptions,
+  McpResourceReadResult,
+  McpResourceSummary,
+  McpToolCallResult,
+  McpToolSummary,
+} from './types.js'
+import {
+  boundedPositiveInteger,
+  cloneConfig,
+  cloneTransport,
+  isPlainRecord,
+  publicConfig,
+  restoreMaskedValues,
+  transportFingerprint,
+  validateInput,
+  validateOperationText,
+} from './validation.js'
+import {
+  DEFAULT_MAX_CALL_ARGUMENTS_BYTES,
+  DEFAULT_MAX_LIST_PAGES,
+  DEFAULT_MAX_RESULT_BYTES,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+} from './constants.js'
 
-import type {
-  McpServerConfig,
-  McpServerInput,
-  McpTransportConfig,
-} from '../../../shared/contracts.js'
-
-type McpToolSummary = McpServerConfig['tools'][number]
-type McpResourceSummary = McpServerConfig['resources'][number]
-type SupportedTransport = StdioClientTransport | StreamableHTTPClientTransport
-
-export type McpToolCallResult = CallToolResult
-export type McpResourceReadResult = ReadResourceResult
-
-export interface McpManagerOptions {
-  requestTimeoutMs?: number
-  maxListPages?: number
-  maxCallArgumentsBytes?: number
-  maxResultBytes?: number
-  onConfigChange?: (config: McpServerConfig) => void | Promise<void>
-  onConfigDelete?: (serverId: string) => void | Promise<void>
-}
-
-interface ManagedConnection {
-  client: Client
-  transport: SupportedTransport
-  closing: boolean
-  closed: boolean
-  stderrText: string
-}
-
-interface DiscoveryResult {
-  tools: McpToolSummary[]
-  resources: McpResourceSummary[]
-}
-
-const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
-const DEFAULT_MAX_LIST_PAGES = 100
-const DEFAULT_MAX_CALL_ARGUMENTS_BYTES = 256 * 1_024
-const DEFAULT_MAX_RESULT_BYTES = 8 * 1_024 * 1_024
-const MAX_JSON_DEPTH = 64
-const MAX_STDERR_LENGTH = 4_000
-const CLIENT_INFO = { name: 'aiwritepaper-agent', version: '0.2.0' }
-const MASKED_VALUE = '••••••••'
-const SENSITIVE_NAME_PATTERN = /authorization|(?:^|[-_])auth(?:$|[-_])|api[-_]?key|access[-_]?key|token|secret|password|cookie|credential/i
-
-export class McpManagerError extends Error {
-  readonly code: string
-  readonly serverId?: string
-
-  constructor(code: string, message: string, serverId?: string, cause?: unknown) {
-    super(message, { cause })
-    this.name = 'McpManagerError'
-    this.code = code
-    this.serverId = serverId
-  }
-}
-
-function cleanText(value: unknown, maxLength = 2_000): string | undefined {
-  if (typeof value !== 'string') return undefined
-  const cleaned = value.replace(/\s+/g, ' ').trim()
-  return cleaned ? cleaned.slice(0, maxLength) : undefined
-}
-
-function cloneTransport(transport: McpTransportConfig): McpTransportConfig {
-  if (transport.type === 'stdio') {
-    return {
-      type: 'stdio',
-      command: transport.command,
-      args: [...transport.args],
-      cwd: transport.cwd,
-      env: transport.env ? { ...transport.env } : undefined,
-    }
-  }
-
-  return {
-    type: 'streamable-http',
-    url: transport.url,
-    headers: transport.headers ? { ...transport.headers } : undefined,
-  }
-}
-
-function cloneConfig(config: McpServerConfig): McpServerConfig {
-  return {
-    ...config,
-    transport: cloneTransport(config.transport),
-    tools: config.tools.map((tool) => ({ ...tool })),
-    resources: config.resources.map((resource) => ({ ...resource })),
-  }
-}
-
-function publicTransport(transport: McpTransportConfig): McpTransportConfig {
-  const cloned = cloneTransport(transport)
-  if (cloned.type === 'stdio') {
-    for (const key of Object.keys(cloned.env ?? {})) {
-      if (SENSITIVE_NAME_PATTERN.test(key) && cloned.env) cloned.env[key] = MASKED_VALUE
-    }
-    return cloned
-  }
-
-  for (const key of Object.keys(cloned.headers ?? {})) {
-    if (SENSITIVE_NAME_PATTERN.test(key) && cloned.headers) cloned.headers[key] = MASKED_VALUE
-  }
-  return cloned
-}
-
-function publicConfig(config: McpServerConfig): McpServerConfig {
-  return { ...cloneConfig(config), transport: publicTransport(config.transport) }
-}
-
-function restoreMaskedValues(
-  transport: McpTransportConfig,
-  existing: McpTransportConfig | undefined,
-): McpTransportConfig {
-  const cloned = cloneTransport(transport)
-  if (cloned.type === 'stdio') {
-    const previous = existing?.type === 'stdio' ? existing.env ?? {} : {}
-    for (const [key, value] of Object.entries(cloned.env ?? {})) {
-      if (value === MASKED_VALUE) {
-        if (previous[key] !== undefined && cloned.env) cloned.env[key] = previous[key]
-        else if (cloned.env) delete cloned.env[key]
-      }
-    }
-    return cloned
-  }
-
-  const previous = existing?.type === 'streamable-http' ? existing.headers ?? {} : {}
-  for (const [key, value] of Object.entries(cloned.headers ?? {})) {
-    if (value === MASKED_VALUE) {
-      if (previous[key] !== undefined && cloned.headers) cloned.headers[key] = previous[key]
-      else if (cloned.headers) delete cloned.headers[key]
-    }
-  }
-  return cloned
-}
-
-function sortedRecord(record: Record<string, string> | undefined): Array<[string, string]> {
-  return Object.entries(record ?? {}).sort(([left], [right]) => left.localeCompare(right))
-}
-
-function transportFingerprint(transport: McpTransportConfig): string {
-  if (transport.type === 'stdio') {
-    return JSON.stringify({
-      type: transport.type,
-      command: transport.command,
-      args: transport.args,
-      cwd: transport.cwd,
-      env: sortedRecord(transport.env),
-    })
-  }
-
-  return JSON.stringify({
-    type: transport.type,
-    url: transport.url,
-    headers: sortedRecord(transport.headers),
-  })
-}
-
-function validateNoNullByte(value: string, label: string): void {
-  if (value.includes('\0')) throw new TypeError(`${label} 不能包含空字符`)
-}
-
-function validateStdioTransport(transport: Extract<McpTransportConfig, { type: 'stdio' }>): McpTransportConfig {
-  const command = transport.command.trim()
-  if (!command) throw new TypeError('MCP stdio 启动命令不能为空')
-  validateNoNullByte(command, 'MCP stdio 启动命令')
-
-  if (!Array.isArray(transport.args) || transport.args.some((arg) => typeof arg !== 'string')) {
-    throw new TypeError('MCP stdio 参数必须是字符串数组')
-  }
-  transport.args.forEach((arg, index) => {
-    validateNoNullByte(arg, 'MCP stdio 参数')
-    const previous = transport.args[index - 1] ?? ''
-    const containsInlineSecret = /--?(?:authorization|api[-_]?key|token|secret|password|cookie|credential)=.+/i.test(arg)
-    const followsSecretFlag = /--?(?:authorization|api[-_]?key|token|secret|password|cookie|credential)$/i.test(previous)
-    if (containsInlineSecret || followsSecretFlag) {
-      throw new TypeError('MCP stdio 凭证不能放在命令参数中，请改用环境变量')
-    }
-  })
-
-  const cwd = transport.cwd?.trim() || undefined
-  if (cwd) validateNoNullByte(cwd, 'MCP stdio 工作目录')
-
-  let env: Record<string, string> | undefined
-  if (transport.env) {
-    env = {}
-    for (const [key, value] of Object.entries(transport.env)) {
-      if (!key || key.includes('=') || key.includes('\0')) {
-        throw new TypeError(`MCP stdio 环境变量名无效：${key || '(空)'}`)
-      }
-      if (typeof value !== 'string') throw new TypeError(`环境变量 ${key} 的值必须是字符串`)
-      validateNoNullByte(value, `环境变量 ${key}`)
-      env[key] = value
-    }
-  }
-
-  return { type: 'stdio', command, args: [...transport.args], cwd, env }
-}
-
-function validateHttpTransport(
-  transport: Extract<McpTransportConfig, { type: 'streamable-http' }>,
-): McpTransportConfig {
-  let url: URL
-  try {
-    url = new URL(transport.url)
-  } catch {
-    throw new TypeError('MCP Streamable HTTP 地址无效')
-  }
-
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new TypeError('MCP Streamable HTTP 仅支持 http 或 https 地址')
-  }
-  if (url.protocol === 'http:' && !isLoopbackHost(url.hostname)) {
-    throw new TypeError('远程 MCP 服务必须使用 HTTPS；HTTP 只允许本机回环地址')
-  }
-  if (url.username || url.password) {
-    throw new TypeError('MCP 地址不能内嵌用户名或密码，请使用安全请求头配置凭证')
-  }
-  for (const [name, value] of url.searchParams) {
-    if (value && SENSITIVE_NAME_PATTERN.test(name)) {
-      throw new TypeError('MCP 地址不能在查询参数中携带凭证，请改用安全请求头')
-    }
-  }
-
-  let headers: Record<string, string> | undefined
-  if (transport.headers) {
-    headers = {}
-    for (const [rawName, rawValue] of Object.entries(transport.headers)) {
-      const name = rawName.trim()
-      if (!name) throw new TypeError('MCP 请求头名称不能为空')
-      if (typeof rawValue !== 'string') throw new TypeError(`请求头 ${name} 的值必须是字符串`)
-      if (/\r|\n/.test(name) || /\r|\n/.test(rawValue)) {
-        throw new TypeError(`请求头 ${name} 包含非法换行符`)
-      }
-      try {
-        new Headers({ [name]: rawValue })
-      } catch {
-        throw new TypeError(`请求头 ${name} 无效`)
-      }
-      headers[name] = rawValue
-    }
-  }
-
-  return { type: 'streamable-http', url: url.toString(), headers }
-}
-
-function isLoopbackHost(hostname: string): boolean {
-  const value = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
-  return value === 'localhost' || value.endsWith('.localhost') || value === '::1' || /^127(?:\.\d{1,3}){3}$/.test(value)
-}
-
-function validateInput(input: McpServerInput): McpServerInput {
-  if (!input || typeof input !== 'object' || !input.transport) {
-    throw new TypeError('MCP 服务配置不能为空')
-  }
-  const name = cleanText(input.name, 100)
-  if (!name) throw new TypeError('MCP 服务名称不能为空')
-
-  let transport: McpTransportConfig
-  if (input.transport.type === 'stdio') {
-    transport = validateStdioTransport(input.transport)
-  } else if (input.transport.type === 'streamable-http') {
-    transport = validateHttpTransport(input.transport)
-  } else {
-    throw new TypeError('不支持的 MCP 传输类型')
-  }
-
-  return {
-    id: cleanText(input.id, 200),
-    name,
-    transport,
-    enabled: Boolean(input.enabled),
-  }
-}
-
-function safeEndpoint(config: McpServerConfig): string {
-  if (config.transport.type === 'stdio') return config.name
-  try {
-    const url = new URL(config.transport.url)
-    url.search = ''
-    url.hash = ''
-    return `${url.origin}${url.pathname}`
-  } catch {
-    return config.name
-  }
-}
-
-function secretValues(config: McpServerConfig): string[] {
-  if (config.transport.type === 'stdio') {
-    return Object.entries(config.transport.env ?? {})
-      .filter(([name]) => SENSITIVE_NAME_PATTERN.test(name))
-      .map(([, value]) => value)
-      .filter((value) => value.length >= 4)
-  }
-
-  const values = Object.values(config.transport.headers ?? {}).filter((value) => value.length >= 4)
-  try {
-    const url = new URL(config.transport.url)
-    for (const [name, value] of url.searchParams) {
-      if (SENSITIVE_NAME_PATTERN.test(name) && value.length >= 4) {
-        values.push(value)
-      }
-    }
-  } catch {
-    // 地址已在保存时校验；这里只做防御性处理。
-  }
-  return values
-}
-
-function redactDiagnostic(value: string, config: McpServerConfig): string {
-  let result = value
-  for (const secret of secretValues(config)) {
-    result = result.split(secret).join('[已隐藏]')
-  }
-
-  if (config.transport.type === 'streamable-http') {
-    result = result.split(config.transport.url).join(safeEndpoint(config))
-  }
-
-  return result
-    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, 'Bearer [已隐藏]')
-    .replace(/((?:api[-_ ]?key|token|secret|password|authorization)\s*[:=]\s*)[^\s,;]+/gi, '$1[已隐藏]')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 1_200)
-}
-
-function describeConnectionError(
-  error: unknown,
-  config: McpServerConfig,
-  stderrText = '',
-): string {
-  const rawMessage = error instanceof Error ? error.message : '未知错误'
-  const message = redactDiagnostic(rawMessage, config)
-  const endpoint = safeEndpoint(config)
-  let description: string
-
-  if (/ENOENT|not found|cannot find/i.test(message)) {
-    description = `无法启动 MCP 服务“${config.name}”：找不到启动命令`
-  } else if (/timed?\s*out|timeout|RequestTimeout/i.test(message)) {
-    description = `连接 MCP 服务“${config.name}”超时`
-  } else if (/401|403|unauthorized|forbidden/i.test(message)) {
-    description = `MCP 服务“${config.name}”拒绝访问，请检查凭证或权限`
-  } else if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|network/i.test(message)) {
-    description = `无法连接 MCP 服务“${config.name}”（${endpoint}）：${message}`
-  } else {
-    description = `MCP 服务“${config.name}”连接失败：${message || '未知错误'}`
-  }
-
-  const stderr = redactDiagnostic(stderrText, config)
-  return stderr ? `${description}；服务进程输出：${stderr}` : description
-}
-
-function describeOperationError(
-  error: unknown,
-  config: McpServerConfig,
-  operation: string,
-): string {
-  const rawMessage = error instanceof Error ? error.message : ''
-  const message = redactDiagnostic(rawMessage, config)
-
-  if (/timed?\s*out|timeout|RequestTimeout|操作超过/i.test(message)) {
-    return `${operation}超时，请稍后重试`
-  }
-  if (/401|403|unauthorized|forbidden/i.test(message)) {
-    return `${operation}失败：服务拒绝访问，请检查凭证或权限`
-  }
-  if (/ECONNREFUSED/i.test(message)) {
-    return `${operation}失败：无法连接 ${safeEndpoint(config)}`
-  }
-  if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(message)) {
-    return `${operation}失败：无法解析服务地址 ${safeEndpoint(config)}`
-  }
-  if (/fetch failed|network|socket|connection.*closed|transport.*closed/i.test(message)) {
-    return `${operation}失败：MCP 网络连接已中断`
-  }
-  if (/-32601|method not found|not supported/i.test(message)) {
-    return `${operation}失败：MCP 服务未提供该能力`
-  }
-  if (/-32602|invalid params|invalid arguments/i.test(message)) {
-    return `${operation}失败：MCP 服务拒绝了请求参数`
-  }
-
-  // 服务端异常可能回显工具参数或资源内容，因此未知错误不透传原始详情。
-  return `${operation}失败：MCP 服务返回错误，原始详情已隐藏`
-}
-
-function validateOperationText(value: unknown, label: string, maxLength: number): string {
-  if (typeof value !== 'string') throw new TypeError(`${label}必须是字符串`)
-  const normalized = value.trim()
-  if (!normalized) throw new TypeError(`${label}不能为空`)
-  if (normalized.length > maxLength) throw new TypeError(`${label}长度不能超过 ${maxLength} 个字符`)
-  if (/[\u0000-\u001f\u007f]/.test(normalized)) {
-    throw new TypeError(`${label}不能包含控制字符`)
-  }
-  return normalized
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  try {
-    const prototype = Object.getPrototypeOf(value)
-    return prototype === Object.prototype || prototype === null
-  } catch {
-    return false
-  }
-}
-
-function formatByteLimit(bytes: number): string {
-  if (bytes >= 1_024 * 1_024) return `${bytes / (1_024 * 1_024)} MiB`
-  return `${Math.ceil(bytes / 1_024)} KiB`
-}
-
-function cloneBoundedJson<T>(
-  value: unknown,
-  label: string,
-  maxBytes: number,
-  serverId: string,
-  invalidCode: string,
-  tooLargeCode: string,
-): T {
-  let estimatedBytes = 0
-  const ancestors = new WeakSet<object>()
-
-  const addEstimatedBytes = (amount: number): void => {
-    estimatedBytes += amount
-    if (estimatedBytes > maxBytes) {
-      throw new McpManagerError(
-        tooLargeCode,
-        `${label}超过安全上限 ${formatByteLimit(maxBytes)}`,
-        serverId,
-      )
-    }
-  }
-
-  const inspect = (current: unknown, depth: number): void => {
-    if (depth > MAX_JSON_DEPTH) {
-      throw new McpManagerError(
-        invalidCode,
-        `${label}的嵌套层级超过 ${MAX_JSON_DEPTH} 层`,
-        serverId,
-      )
-    }
-
-    if (current === null) {
-      addEstimatedBytes(4)
-      return
-    }
-    if (typeof current === 'string') {
-      addEstimatedBytes(Buffer.byteLength(current, 'utf8') + 2)
-      return
-    }
-    if (typeof current === 'boolean') {
-      addEstimatedBytes(current ? 4 : 5)
-      return
-    }
-    if (typeof current === 'number') {
-      if (!Number.isFinite(current)) {
-        throw new McpManagerError(invalidCode, `${label}包含无效数字`, serverId)
-      }
-      addEstimatedBytes(32)
-      return
-    }
-    if (typeof current !== 'object') {
-      throw new McpManagerError(invalidCode, `${label}必须是可序列化 JSON`, serverId)
-    }
-    if (ancestors.has(current)) {
-      throw new McpManagerError(invalidCode, `${label}不能包含循环引用`, serverId)
-    }
-
-    ancestors.add(current)
-    try {
-      if (Array.isArray(current)) {
-        addEstimatedBytes(current.length + 2)
-        for (const item of current) inspect(item, depth + 1)
-        return
-      }
-      if (!isPlainRecord(current) || Object.getOwnPropertySymbols(current).length > 0) {
-        throw new McpManagerError(invalidCode, `${label}必须由普通 JSON 对象组成`, serverId)
-      }
-
-      addEstimatedBytes(2)
-      for (const [key, item] of Object.entries(current)) {
-        addEstimatedBytes(Buffer.byteLength(key, 'utf8') + 4)
-        inspect(item, depth + 1)
-      }
-    } finally {
-      ancestors.delete(current)
-    }
-  }
-
-  try {
-    inspect(value, 0)
-    const serialized = JSON.stringify(value)
-    if (serialized === undefined) {
-      throw new McpManagerError(invalidCode, `${label}必须是可序列化 JSON`, serverId)
-    }
-    if (Buffer.byteLength(serialized, 'utf8') > maxBytes) {
-      throw new McpManagerError(
-        tooLargeCode,
-        `${label}超过安全上限 ${formatByteLimit(maxBytes)}`,
-        serverId,
-      )
-    }
-    return JSON.parse(serialized) as T
-  } catch (error) {
-    if (error instanceof McpManagerError) throw error
-    // 不附带原始异常，避免 getter 或自定义对象把敏感内容带入错误链。
-    throw new McpManagerError(invalidCode, `${label}必须是可序列化 JSON`, serverId)
-  }
-}
-
-function cloneToolInputSchema(value: unknown): Record<string, unknown> | undefined {
-  if (!isPlainRecord(value)) return undefined
-  try {
-    return cloneBoundedJson<Record<string, unknown>>(
-      value,
-      'MCP 工具输入结构',
-      64 * 1_024,
-      'discovery',
-      'MCP_INVALID_TOOL_SCHEMA',
-      'MCP_TOOL_SCHEMA_TOO_LARGE',
-    )
-  } catch {
-    // 单个服务返回异常 schema 时仍保留工具名称与说明，但不允许自动推断参数。
-    return undefined
-  }
-}
-
-function boundedPositiveInteger(value: number | undefined, fallback: number, maximum: number): number {
-  if (!Number.isFinite(value)) return fallback
-  return Math.min(maximum, Math.max(1, Math.trunc(value as number)))
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timeout = setTimeout(() => reject(new Error(`操作超过 ${timeoutMs} 毫秒`)), timeoutMs)
-      }),
-    ])
-  } finally {
-    if (timeout) clearTimeout(timeout)
-  }
-}
+export { McpManagerError }
+export type {
+  McpManagerOptions,
+  McpResourceReadResult,
+  McpToolCallResult,
+} from './types.js'
 
 export class McpManager {
   private readonly configs = new Map<string, McpServerConfig>()
@@ -666,7 +150,7 @@ export class McpManager {
 
     const config = this.requireConfig(serverId)
     await this.patchConfig(serverId, { status: 'connecting', lastError: undefined })
-    const runtime = this.createRuntime(config)
+    const runtime = createRuntime(config)
 
     try {
       await runtime.client.connect(runtime.transport, { timeout: this.requestTimeoutMs })
@@ -690,7 +174,7 @@ export class McpManager {
       throw new McpManagerError('MCP_TEST_FAILED', message, serverId, error)
     } finally {
       runtime.closing = true
-      await this.closeRuntime(runtime).catch(() => undefined)
+      await closeRuntime(runtime, this.requestTimeoutMs).catch(() => undefined)
     }
   }
 
@@ -727,7 +211,7 @@ export class McpManager {
     runtime.closing = true
     this.connections.delete(serverId)
     try {
-      await this.closeRuntime(runtime)
+      await closeRuntime(runtime, this.requestTimeoutMs)
     } catch (error) {
       const message = describeConnectionError(error, config, runtime.stderrText)
       await this.patchConfig(serverId, { status: 'failed', lastError: message })
@@ -755,7 +239,7 @@ export class McpManager {
   async listTools(serverId: string): Promise<McpToolSummary[]> {
     const runtime = this.requireConnection(serverId)
     try {
-      const tools = await this.fetchTools(runtime.client)
+      const tools = await fetchTools(runtime.client, this.discoveryOptions())
       await this.patchConfig(serverId, { tools, lastError: undefined })
       return tools.map((tool) => ({ ...tool }))
     } catch (error) {
@@ -766,7 +250,7 @@ export class McpManager {
   async listResources(serverId: string): Promise<McpResourceSummary[]> {
     const runtime = this.requireConnection(serverId)
     try {
-      const resources = await this.fetchResources(runtime.client)
+      const resources = await fetchResources(runtime.client, this.discoveryOptions())
       await this.patchConfig(serverId, { resources, lastError: undefined })
       return resources.map((resource) => ({ ...resource }))
     } catch (error) {
@@ -891,6 +375,17 @@ export class McpManager {
     }
   }
 
+  private discoveryOptions(): { maxListPages: number; requestTimeoutMs: number } {
+    return {
+      maxListPages: this.maxListPages,
+      requestTimeoutMs: this.requestTimeoutMs,
+    }
+  }
+
+  private async discover(client: ManagedConnection['client']) {
+    return discoverCapabilities(client, this.discoveryOptions())
+  }
+
   private async ensureConnection(serverId: string): Promise<ManagedConnection> {
     const config = this.requireConfig(serverId)
     const active = this.connections.get(serverId)
@@ -928,7 +423,7 @@ export class McpManager {
     }
 
     await this.patchConfig(serverId, { status: 'connecting', lastError: undefined })
-    const runtime = this.createRuntime(config)
+    const runtime = createRuntime(config)
     this.attachRuntimeCallbacks(serverId, runtime)
 
     try {
@@ -951,7 +446,7 @@ export class McpManager {
     } catch (error) {
       runtime.closing = true
       this.connections.delete(serverId)
-      await this.closeRuntime(runtime).catch(() => undefined)
+      await closeRuntime(runtime, this.requestTimeoutMs).catch(() => undefined)
       const message = describeConnectionError(error, config, runtime.stderrText)
       await this.patchConfig(serverId, {
         status: 'failed',
@@ -962,59 +457,6 @@ export class McpManager {
       })
       throw new McpManagerError('MCP_CONNECT_FAILED', message, serverId, error)
     }
-  }
-
-  private createRuntime(config: McpServerConfig): ManagedConnection {
-    const client = new Client(CLIENT_INFO, { capabilities: {} })
-    let transport: SupportedTransport
-
-    if (config.transport.type === 'stdio') {
-      const env = { ...getDefaultEnvironment(), ...(config.transport.env ?? {}) }
-      // Finder 启动的应用通常没有交互式 Shell 的 PATH；补入 macOS 常见工具目录，
-      // 使应用内置的 uvx MCP 与用户自行配置的本机工具都能被稳定找到。
-      env.PATH = [
-        join(homedir(), '.local', 'bin'),
-        '/opt/homebrew/bin',
-        '/usr/local/bin',
-        env.PATH,
-      ].filter(Boolean).join(delimiter)
-      transport = new StdioClientTransport({
-        command: config.transport.command,
-        args: [...config.transport.args],
-        cwd: config.transport.cwd,
-        env,
-        stderr: 'pipe',
-      })
-    } else {
-      transport = new StreamableHTTPClientTransport(new URL(config.transport.url), {
-        requestInit: {
-          headers: config.transport.headers ? { ...config.transport.headers } : undefined,
-        },
-        reconnectionOptions: {
-          maxReconnectionDelay: 10_000,
-          initialReconnectionDelay: 500,
-          reconnectionDelayGrowFactor: 1.5,
-          maxRetries: 2,
-        },
-      })
-    }
-
-    const runtime: ManagedConnection = {
-      client,
-      transport,
-      closing: false,
-      closed: false,
-      stderrText: '',
-    }
-
-    if (transport instanceof StdioClientTransport) {
-      transport.stderr?.on('data', (chunk: unknown) => {
-        const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk)
-        runtime.stderrText = `${runtime.stderrText}${text}`.slice(-MAX_STDERR_LENGTH)
-      })
-    }
-
-    return runtime
   }
 
   private attachRuntimeCallbacks(serverId: string, runtime: ManagedConnection): void {
@@ -1035,95 +477,6 @@ export class McpManager {
       const message = describeConnectionError(error, config, runtime.stderrText)
       void this.patchConfig(serverId, { lastError: message }).catch(() => undefined)
     }
-  }
-
-  private async discover(client: Client): Promise<DiscoveryResult> {
-    const capabilities = client.getServerCapabilities()
-    const [tools, resources] = await Promise.all([
-      capabilities?.tools ? this.fetchTools(client) : Promise.resolve([]),
-      capabilities?.resources ? this.fetchResources(client) : Promise.resolve([]),
-    ])
-    return { tools, resources }
-  }
-
-  private async fetchTools(client: Client): Promise<McpToolSummary[]> {
-    const tools = new Map<string, McpToolSummary>()
-    const seenCursors = new Set<string>()
-    let cursor: string | undefined
-
-    for (let page = 0; page < this.maxListPages; page += 1) {
-      const result = await client.listTools(
-        cursor ? { cursor } : undefined,
-        { timeout: this.requestTimeoutMs },
-      )
-      for (const tool of result.tools) {
-        const name = cleanText(tool.name, 256)
-        if (!name || tools.has(name)) continue
-        tools.set(name, {
-          name,
-          description: cleanText(tool.description),
-          inputSchema: cloneToolInputSchema(tool.inputSchema),
-        })
-      }
-
-      if (!result.nextCursor) return [...tools.values()]
-      if (seenCursors.has(result.nextCursor)) {
-        throw new Error('MCP tools/list 返回了重复游标')
-      }
-      seenCursors.add(result.nextCursor)
-      cursor = result.nextCursor
-    }
-
-    throw new Error(`MCP tools/list 超过 ${this.maxListPages} 页，已停止继续读取`)
-  }
-
-  private async fetchResources(client: Client): Promise<McpResourceSummary[]> {
-    const resources = new Map<string, McpResourceSummary>()
-    const seenCursors = new Set<string>()
-    let cursor: string | undefined
-
-    for (let page = 0; page < this.maxListPages; page += 1) {
-      const result = await client.listResources(
-        cursor ? { cursor } : undefined,
-        { timeout: this.requestTimeoutMs },
-      )
-      for (const resource of result.resources) {
-        const uri = cleanText(resource.uri, 4_096)
-        const name = cleanText(resource.name, 512)
-        if (!uri || !name || resources.has(uri)) continue
-        resources.set(uri, { uri, name, description: cleanText(resource.description) })
-      }
-
-      if (!result.nextCursor) return [...resources.values()]
-      if (seenCursors.has(result.nextCursor)) {
-        throw new Error('MCP resources/list 返回了重复游标')
-      }
-      seenCursors.add(result.nextCursor)
-      cursor = result.nextCursor
-    }
-
-    throw new Error(`MCP resources/list 超过 ${this.maxListPages} 页，已停止继续读取`)
-  }
-
-  private async closeRuntime(runtime: ManagedConnection): Promise<void> {
-    runtime.closing = true
-    let terminateError: unknown
-
-    if (runtime.transport instanceof StreamableHTTPClientTransport) {
-      try {
-        await withTimeout(runtime.transport.terminateSession(), Math.min(3_000, this.requestTimeoutMs))
-      } catch (error) {
-        terminateError = error
-      }
-    }
-
-    try {
-      await runtime.client.close()
-    } finally {
-      runtime.closed = true
-    }
-
-    if (terminateError) throw terminateError
   }
 
   private requireConfig(serverId: string): McpServerConfig {

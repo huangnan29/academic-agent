@@ -19,3 +19,16 @@ Before making substantial visual changes, use the Product Design plugin's `get-c
 When implementing from a selected generated mock, treat that image as the source of truth for layout, component anatomy, density, spacing, color, typography, visible content, and hierarchy.
 
 Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts/prepare-sites-build.mjs`, and `tests/sites-worker.test.mjs` intact so the same local prototype can be handed to Sites. Before a Sites handoff, run `npm run build` and `npm run test:sites`; the build must leave `dist/client/index.html`, `dist/server/index.js`, and `dist/.openai/hosting.json`.
+
+## 当前模块边界
+
+- `src/App.tsx` 是组合入口，不直接承载完整领域流程；全局操作使用 `src/hooks/`。
+- `src/components/sidebar/` 承载项目树、菜单、排序和调宽；`Sidebar.tsx` 只保留侧栏布局组合。
+- `src/components/composer/` 承载 Slash、语音、附件/目标/计划；`Composer.tsx` 保留输入状态与工具栏组合。
+- `src/fallback.ts` 只组合浏览器演示 API；演示状态、fixtures 和领域 API 位于 `src/fallback/`。
+- `electron/main/ipc/` 按领域注册 IPC；禁止重新把处理函数堆回 `ipcHandlers.ts`。
+- `electron/services/storage/workspace-*.ts` 承载纯状态变换；只有 `WorkspaceRepository` 负责磁盘原子写入。
+- `electron/services/mcp/` 中校验、脱敏、传输、发现和结果限界保持分离；新增 MCP 能力不得绕过这些公共模块。
+- `electron/services/pipeline/context-mcp.ts` 是 MCP 返回进入模型前的唯一安全清洗入口；`context-skills.ts` 是应用内 Skills 注入入口。
+
+界面文件遵循上级 `AGENTS.md` 的规模门禁。复杂组件接近 500 行时应先抽离领域 Hook 或子组件，再新增交互；拆分不得改变现有 class、ARIA、焦点顺序和键盘行为。
