@@ -1,4 +1,4 @@
-import type { ManuscriptSection } from '../../shared/contracts'
+import type { ManuscriptSection, SectionGenerateInput } from '../../shared/contracts'
 import { saveSectionContentInState } from '../../shared/sectionContent'
 import { emitSection, subscribeSection } from './events'
 import {
@@ -14,6 +14,20 @@ import {
   restoreActiveModelIfNeeded,
 } from './state'
 
+function generationMetadata(input: SectionGenerateInput): Pick<ManuscriptSection, 'generationProfile' | 'generationMode' | 'generationStrategyIds' | 'generationContentForms' | 'generationCustomInstructions'> {
+  return {
+    generationProfile: input.options?.profile,
+    generationMode: input.options?.mode,
+    generationStrategyIds: input.options?.strategyIds
+      ? [...input.options.strategyIds]
+      : undefined,
+    generationContentForms: input.options?.contentForms
+      ? [...input.options.contentForms]
+      : undefined,
+    generationCustomInstructions: input.options?.customInstructions,
+  }
+}
+
 export const sectionApi: Window['paperAgent']['section'] = {
   async generate(input) {
     const outline = readState().outlines[input.projectId] ?? []
@@ -24,6 +38,7 @@ export const sectionApi: Window['paperAgent']['section'] = {
     const target = findOutlineNode(outline, outlineNodeId)
     const provider = readState().providers.find((item) => item.id === input.providerId)
     const runId = makeId('section-run')
+    const metadata = generationMetadata(input)
     const fullContent = sourceSection
       ? `## ${sourceSection.title}\n\n这是根据当前大纲生成的浏览器演示章节。真实应用会使用所选模型和已纳入文献逐段写作，并在右侧标记引用证据的核验状态。\n\n当前结果未连接真实模型与文献门户，不可作为正式论文内容。`
       : target
@@ -40,6 +55,7 @@ export const sectionApi: Window['paperAgent']['section'] = {
         existing.generationProviderId = input.providerId
         existing.generationModel = input.model
         existing.thinkingRequested = false
+        Object.assign(existing, metadata)
         existing.updatedAt = now()
       } else if (target) {
         draft.sections.push({
@@ -55,6 +71,7 @@ export const sectionApi: Window['paperAgent']['section'] = {
           generationProviderId: input.providerId,
           generationModel: input.model,
           thinkingRequested: false,
+          ...metadata,
           origin: 'demo',
           verificationStatus: 'demo',
           createdAt: now(),
@@ -85,6 +102,7 @@ export const sectionApi: Window['paperAgent']['section'] = {
         existing.generationProviderId = input.providerId
         existing.generationModel = input.model
         existing.thinkingRequested = false
+        Object.assign(existing, metadata)
         existing.generationError = undefined
         recordFallbackDerivedVersions(draft, existing.projectId, existing.id, previous)
         makeSectionVersion(draft, existing, 'generated')
@@ -133,6 +151,15 @@ export const sectionApi: Window['paperAgent']['section'] = {
       selected.generationProviderId = version.generationProviderId
       selected.generationModel = version.generationModel
       selected.thinkingRequested = version.thinkingRequested
+      selected.generationProfile = version.generationProfile
+      selected.generationMode = version.generationMode
+      selected.generationStrategyIds = version.generationStrategyIds
+        ? [...version.generationStrategyIds]
+        : undefined
+      selected.generationContentForms = version.generationContentForms
+        ? [...version.generationContentForms]
+        : undefined
+      selected.generationCustomInstructions = version.generationCustomInstructions
       selected.status = version.status
       selected.generationError = version.source === 'partial' ? '这是一次未完整生成的历史版本。' : undefined
       recordFallbackDerivedVersions(draft, section.projectId, sectionId, previous)

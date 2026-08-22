@@ -486,4 +486,14 @@
 - 两轮验证均使用隔离 `user-data-dir`，不修改用户正式项目；没有调用真实模型。重构后的安装副本已分别完成 `app.asar` 哈希一致性检查和新进程启动。
 - 结论：本轮证明结构拆分没有造成已覆盖界面的视觉与交互回归，不代表新增功能或论文生成质量提升。
 
+## 34. 章节感知单次生成原生验收（2026-08-22）
+
+- 隔离安装版通过本地 OpenAI-compatible Mock 生成“绪论”章节，正文从 23 字符增长到 413，再完成为 788 字符；Thinking 同步从“正在思考”切换为“思考过程”。
+- 主进程识别章节职责为“绪论 / 问题提出”，采用“证据优先 + 自然学术”；当前章节和历史版本保存相同 profile/strategy 元数据。
+- 文稿工具栏以低强调文字显示“绪论 / 问题提出 · 证据优先 + 自然学术”，历史版本项显示对应章节职责，没有增加策略弹窗或高饱和强调控件。
+- 文稿页发送消息后自动切到对话页，本次消息仍保存 `contextScope=section`。
+- 证据：`output/native-section-aware-generation-final/section-streaming.png`、`section-completed.png`、`manuscript-message-opened-chat.png`。
+- 同一打包应用随后完成 21 项正常/菜单/设置/对话框交互和 4 项重启恢复，均为 0 失败、0 运行时错误；证据：`output/native-section-aware-generation-final/regression/`。
+- 边界：本轮使用本地 Mock 验证真实调用链与元数据，不代表真实模型写作质量盲评已经通过；没有新增重新生成策略弹窗。
+
 final result: passed

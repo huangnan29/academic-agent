@@ -223,7 +223,10 @@ export function ManuscriptView({
                       >
                         <span>
                           <strong>第 {version.number} 版</strong>
-                          <small><time dateTime={version.createdAt}>{formatSectionVersionMoment(version)}</time></small>
+                          <small>
+                            <time dateTime={version.createdAt}>{formatSectionVersionMoment(version)}</time>
+                            {version.generationProfile ? ` · ${sectionProfileLabel(version.generationProfile)}` : ''}
+                          </small>
                         </span>
                         {version.id === activeVersion?.id && <Check size={14} aria-hidden="true" />}
                       </button>
@@ -248,6 +251,14 @@ export function ManuscriptView({
             <span className="section-generation-model">
               <BrainCircuit size={12} /> {generationProviderName ? `${generationProviderName} · ` : ''}{section.generationModel}
               {thinkingState ? ` · ${thinkingState}` : ''}
+            </span>
+          )}
+          {section.generationProfile && (
+            <span
+              className="section-generation-model"
+              title={`章节职责：${sectionProfileLabel(section.generationProfile)}；优化策略：${sectionStrategyLabels(section.generationStrategyIds)}`}
+            >
+              {sectionProfileLabel(section.generationProfile)} · {sectionStrategyLabels(section.generationStrategyIds)}
             </span>
           )}
         </div>
@@ -308,4 +319,24 @@ export function ManuscriptView({
       </article>
     </div>
   )
+}
+
+function sectionProfileLabel(profile: NonNullable<ManuscriptSection['generationProfile']>): string {
+  if (profile === 'abstract') return '摘要'
+  if (profile === 'introduction') return '绪论 / 问题提出'
+  if (profile === 'literature-review') return '综述 / 理论'
+  if (profile === 'method-design') return '方法 / 设计'
+  if (profile === 'result-implementation') return '结果 / 实现'
+  if (profile === 'discussion-conclusion') return '讨论 / 结论'
+  return '通用分析'
+}
+
+function sectionStrategyLabels(strategies: ManuscriptSection['generationStrategyIds']): string {
+  if (!strategies?.length) return '默认策略'
+  return strategies.map((strategy) => {
+    if (strategy === 'evidence-first') return '证据优先'
+    if (strategy === 'argument-deepening') return '论证深化'
+    if (strategy === 'natural-academic') return '自然学术'
+    return '精炼表达'
+  }).join(' + ')
 }

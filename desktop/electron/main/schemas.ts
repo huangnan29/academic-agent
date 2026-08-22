@@ -205,6 +205,26 @@ export const sectionGenerateSchema = z.object({
   sectionId: z.string().min(1),
   providerId: z.string().min(1),
   model: z.string().trim().min(1),
+  options: z.object({
+    mode: z.enum(['initial', 'revise', 'rewrite']).optional(),
+    profile: z.enum([
+      'abstract',
+      'introduction',
+      'literature-review',
+      'method-design',
+      'result-implementation',
+      'discussion-conclusion',
+      'general-analysis',
+    ]).optional(),
+    strategyIds: z.array(z.enum([
+      'evidence-first',
+      'argument-deepening',
+      'natural-academic',
+      'concise',
+    ])).max(2).optional(),
+    contentForms: z.array(z.enum(['table', 'diagram', 'formula', 'code'])).max(4).optional(),
+    customInstructions: z.string().trim().max(2_000).optional(),
+  }).strict().optional(),
 })
 
 export const outlineNodeSchema: z.ZodType<OutlineNode> = z.lazy(() =>

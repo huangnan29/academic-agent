@@ -8,6 +8,7 @@ import type {
 import {
   createLiveEntityBase,
   createSectionVersion,
+  copySectionGenerationMetadata,
   now,
   preserveCurrentSectionVersion,
   preserveProjectSectionVersions,
@@ -203,21 +204,26 @@ export function saveSection(state: WorkspaceState, sectionId: string, content: s
       }
       return saved
 }
-export function beginSectionGeneration(state: WorkspaceState, sectionId: string, metadata: Pick<ManuscriptSection, "generationProviderId" | "generationModel" | "thinkingRequested">): { section: ManuscriptSection; baseVersion: number } {
+export function beginSectionGeneration(state: WorkspaceState, sectionId: string, metadata: Pick<ManuscriptSection, "generationProviderId" | "generationModel" | "thinkingRequested" | "generationProfile" | "generationMode" | "generationStrategyIds" | "generationContentForms" | "generationCustomInstructions">): { section: ManuscriptSection; baseVersion: number } {
       const section = state.sections.find((item) => item.id === sectionId)
       if (!section) throw new Error('论文章节不存在。')
       if (section.status === 'generating') throw new Error('该章节已经在生成中。')
       const timestamp = now()
       preserveProjectSectionVersions(state, section.projectId)
       const baseVersion = section.version
-      Object.assign(section, metadata, {
+      copySectionGenerationMetadata(section, {
+        ...metadata,
+        // 开始生成时仍保留上一轮已收到的 Thinking，直到提交或失败路径明确更新它。
+        reasoningContent: section.reasoningContent,
+      })
+      Object.assign(section, {
         status: 'generating' as const,
         generationError: undefined,
         updatedAt: timestamp,
       })
       return { section, baseVersion }
 }
-export function commitSectionGeneration(state: WorkspaceState, sectionId: string, expectedVersion: number, content: string, metadata: Pick<ManuscriptSection, "reasoningContent" | "generationProviderId" | "generationModel" | "thinkingRequested"> & { source: "generated" | "partial"; generationError?: string }): ManuscriptSection {
+export function commitSectionGeneration(state: WorkspaceState, sectionId: string, expectedVersion: number, content: string, metadata: Pick<ManuscriptSection, "reasoningContent" | "generationProviderId" | "generationModel" | "thinkingRequested" | "generationProfile" | "generationMode" | "generationStrategyIds" | "generationContentForms" | "generationCustomInstructions"> & { source: "generated" | "partial"; generationError?: string }): ManuscriptSection {
       const section = state.sections.find((item) => item.id === sectionId)
       if (!section) throw new Error('论文章节不存在。')
       if (section.version !== expectedVersion || section.status !== 'generating') {
@@ -226,8 +232,10 @@ export function commitSectionGeneration(state: WorkspaceState, sectionId: string
       const timestamp = now()
       const previousContent = preserveProjectSectionVersions(state, section.projectId)
       const saved = saveSectionContentInState(state, sectionId, content, timestamp)
-      Object.assign(saved, metadata, {
+      copySectionGenerationMetadata(saved, metadata)
+      Object.assign(saved, {
         status: metadata.source === 'partial' ? 'error' as const : 'draft' as const,
+        generationError: metadata.generationError,
         updatedAt: timestamp,
       })
       const generatedWithLiveProvider = Boolean(
@@ -262,11 +270,16 @@ export function commitSectionGeneration(state: WorkspaceState, sectionId: string
       }
       return saved
 }
-export function failSectionGeneration(state: WorkspaceState, sectionId: string, expectedVersion: number, patch: Pick<ManuscriptSection, "reasoningContent" | "generationProviderId" | "generationModel" | "thinkingRequested" | "generationError">): ManuscriptSection {
+export function failSectionGeneration(state: WorkspaceState, sectionId: string, expectedVersion: number, patch: Pick<ManuscriptSection, "reasoningContent" | "generationProviderId" | "generationModel" | "thinkingRequested" | "generationProfile" | "generationMode" | "generationStrategyIds" | "generationContentForms" | "generationCustomInstructions" | "generationError">): ManuscriptSection {
       const section = state.sections.find((item) => item.id === sectionId)
       if (!section) throw new Error('论文章节不存在。')
       if (section.version !== expectedVersion || section.status !== 'generating') return section
-      Object.assign(section, patch, { status: 'error' as const, updatedAt: now() })
+      copySectionGenerationMetadata(section, patch)
+      Object.assign(section, {
+        status: 'error' as const,
+        generationError: patch.generationError,
+        updatedAt: now(),
+      })
       return section
 }
 export function selectSectionVersion(state: WorkspaceState, sectionId: string, versionId: string): ManuscriptSection {
@@ -280,12 +293,9 @@ export function selectSectionVersion(state: WorkspaceState, sectionId: string, v
       const timestamp = now()
       const previousContent = preserveProjectSectionVersions(state, section.projectId)
       const selected = saveSectionContentInState(state, sectionId, version.content, timestamp)
+      copySectionGenerationMetadata(selected, version)
       Object.assign(selected, {
         status: version.status,
-        reasoningContent: version.reasoningContent,
-        generationProviderId: version.generationProviderId,
-        generationModel: version.generationModel,
-        thinkingRequested: version.thinkingRequested,
         generationError: version.source === 'partial' ? '这是一次未完整生成的历史版本。' : undefined,
         activeGenerationVersionId: version.id,
         updatedAt: timestamp,

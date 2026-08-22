@@ -6,6 +6,7 @@ import type {
   OutlineNode,
   Project,
   ResearchBrief,
+  SectionGenerationMode,
   SkillDefinition,
   WorkspaceState,
 } from '../../../shared/contracts'
@@ -16,6 +17,10 @@ import {
   type ResolvedChatStartInput,
 } from './context-mcp'
 import { formatEnabledSkills } from './context-skills'
+import {
+  formatSectionGenerationPlan,
+  type SectionGenerationPlan,
+} from './section-profile'
 
 export {
   sanitizeMcpText,
@@ -38,6 +43,12 @@ export interface PaperContextOptions {
   selectedText?: string
   targetSectionId?: string
   maxChars?: number
+}
+
+export interface SectionPromptOptions {
+  generationPlan?: SectionGenerationPlan
+  mode?: SectionGenerationMode
+  customInstructions?: string
 }
 
 export function buildOutlinePrompt(
@@ -217,6 +228,7 @@ export function buildSectionPrompt(
   state: WorkspaceState,
   projectId: string,
   sectionId: string,
+  options: SectionPromptOptions = {},
 ): ProviderChatMessage[] {
   const project = getProject(state, projectId)
   const section = state.sections.find(
@@ -230,6 +242,16 @@ export function buildSectionPrompt(
     targetSectionId: sectionId,
     maxChars: DEFAULT_CONTEXT_LIMIT,
   })
+  const generationPlan = options.generationPlan
+    ? formatSectionGenerationPlan(options.generationPlan)
+    : ''
+  const strategyInstructions = options.generationPlan
+    ? formatOptimizationStrategies(options.generationPlan.strategyIds)
+    : ''
+  const modeInstruction = formatGenerationMode(options.mode ?? 'initial')
+  const customInstructions = options.customInstructions?.trim()
+    ? `## 本次用户补充要求\n${options.customInstructions.trim()}`
+    : ''
 
   return [
     {
@@ -239,6 +261,10 @@ export function buildSectionPrompt(
         '保留标题层级，不输出整篇论文或额外的写作说明。',
         '引用格式必须为 `【文献:文献ID】`，且 ID 只能来自上下文。',
         '不得虚构研究结果、样本、DOI、页码或数据；证据不足必须明确说明。',
+        modeInstruction,
+        generationPlan,
+        strategyInstructions,
+        customInstructions,
         '',
         context,
       ].join('\n'),
@@ -254,6 +280,27 @@ export function buildSectionPrompt(
       ].join('\n'),
     },
   ]
+}
+
+function formatGenerationMode(mode: SectionGenerationMode): string {
+  if (mode === 'revise') {
+    return '本次为基于当前稿优化：保留已有事实、专业术语、引用标记和未要求改变的论证，只重写确有必要的部分；输出仍为一份完整的新版本正文。'
+  }
+  if (mode === 'rewrite') {
+    return '本次为从头重写：重新组织本节论证，但仍须遵守项目事实、引用白名单和证据边界，不得沿用旧稿中的无依据断言。'
+  }
+  return '本次为首次生成：按照本节职责形成完整正文，不得把研究计划、预期结果或待验证内容写成已经完成。'
+}
+
+function formatOptimizationStrategies(strategies: SectionGenerationPlan['strategyIds']): string {
+  if (strategies.length === 0) return ''
+  const instructions = strategies.map((strategy) => {
+    if (strategy === 'evidence-first') return '- 证据优先：每个重要主张都要绑定可追溯文献、项目材料或明确分析依据；证据不足时降低断言强度。'
+    if (strategy === 'argument-deepening') return '- 论证深化：补足概念关系、作用机制、反例、适用条件和局部结论，不以重复解释增加字数。'
+    if (strategy === 'natural-academic') return '- 自然学术：减少套话、同构句式、机械过渡和重复小结；句段节奏服从论证，同时保留专业术语与必要限定。'
+    return '- 精炼表达：删除重复背景和空泛评价，把篇幅用于分析、证据与边界说明。'
+  })
+  return ['## 本次优化策略', ...instructions].join('\n')
 }
 
 function getProject(state: WorkspaceState, projectId: string): Project {

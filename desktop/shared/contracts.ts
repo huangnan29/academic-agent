@@ -411,6 +411,35 @@ export type PaperStructurePattern =
 export type OutlineEvidenceNeed = 'literature' | 'project-data' | 'case-material' | 'analysis'
 export type OutlineContentForm = 'prose' | 'table' | 'diagram' | 'formula' | 'code'
 
+/** 正文生成时识别的章节职责；无法可靠判断时使用 general-analysis。 */
+export type SectionProfile =
+  | 'abstract'
+  | 'introduction'
+  | 'literature-review'
+  | 'method-design'
+  | 'result-implementation'
+  | 'discussion-conclusion'
+  | 'general-analysis'
+
+/** 单次生成可组合的内置优化策略；首批由章节类型自动选择。 */
+export type SectionOptimizationStrategy =
+  | 'evidence-first'
+  | 'argument-deepening'
+  | 'natural-academic'
+  | 'concise'
+
+export type SectionGenerationMode = 'initial' | 'revise' | 'rewrite'
+export type SectionContentForm = Exclude<OutlineContentForm, 'prose'>
+
+/** 为后续重新生成面板预留的窄化契约；当前首次生成全部字段均可缺省。 */
+export interface SectionGenerationOptions {
+  mode?: SectionGenerationMode
+  profile?: SectionProfile
+  strategyIds?: SectionOptimizationStrategy[]
+  contentForms?: SectionContentForm[]
+  customInstructions?: string
+}
+
 /** 大纲生成前的结构决策快照，供界面解释和后续章节生成复用。 */
 export interface OutlineArchitecture {
   projectId: string
@@ -494,6 +523,12 @@ export interface ManuscriptSection extends BaseEntity {
   reasoningContent?: string
   /** 当前请求是否显式要求提供商开启 Thinking。 */
   thinkingRequested?: boolean
+  /** 最近一次生成识别出的章节职责和实际采用策略。 */
+  generationProfile?: SectionProfile
+  generationMode?: SectionGenerationMode
+  generationStrategyIds?: SectionOptimizationStrategy[]
+  generationContentForms?: SectionContentForm[]
+  generationCustomInstructions?: string
   /** 章节生成失败时保留可读错误；已经收到的正文片段不会被清空。 */
   generationError?: string
   /**
@@ -518,6 +553,11 @@ export interface ManuscriptSectionVersion extends BaseEntity {
   generationProviderId?: string
   generationModel?: string
   thinkingRequested?: boolean
+  generationProfile?: SectionProfile
+  generationMode?: SectionGenerationMode
+  generationStrategyIds?: SectionOptimizationStrategy[]
+  generationContentForms?: SectionContentForm[]
+  generationCustomInstructions?: string
 }
 
 export interface CitationEvidence extends BaseEntity {
@@ -687,6 +727,7 @@ export interface SectionGenerateInput {
   sectionId: string
   providerId: string
   model: string
+  options?: SectionGenerationOptions
 }
 
 export interface SectionVersionSelectInput {

@@ -88,6 +88,39 @@ function sectionWordCount(content: string): number {
   return content.replace(/\s+/g, '').length
 }
 
+/**
+ * 章节生成元数据在章节头和历史版本之间使用同一组可选字段。
+ * 复制数组时创建副本，避免版本快照与当前章节共享可变引用。
+ */
+export type SectionGenerationMetadata = Pick<ManuscriptSection, 'reasoningContent'
+  | 'generationProviderId'
+  | 'generationModel'
+  | 'thinkingRequested'
+  | 'generationProfile'
+  | 'generationMode'
+  | 'generationStrategyIds'
+  | 'generationContentForms'
+  | 'generationCustomInstructions'>
+
+export function copySectionGenerationMetadata(
+  target: SectionGenerationMetadata,
+  source: SectionGenerationMetadata,
+): void {
+  target.reasoningContent = source.reasoningContent
+  target.generationProviderId = source.generationProviderId
+  target.generationModel = source.generationModel
+  target.thinkingRequested = source.thinkingRequested
+  target.generationProfile = source.generationProfile
+  target.generationMode = source.generationMode
+  target.generationStrategyIds = source.generationStrategyIds
+    ? [...source.generationStrategyIds]
+    : undefined
+  target.generationContentForms = source.generationContentForms
+    ? [...source.generationContentForms]
+    : undefined
+  target.generationCustomInstructions = source.generationCustomInstructions
+}
+
 export function createSectionVersion(
   state: WorkspaceState,
   section: ManuscriptSection,
@@ -111,6 +144,15 @@ export function createSectionVersion(
     generationProviderId: section.generationProviderId,
     generationModel: section.generationModel,
     thinkingRequested: section.thinkingRequested,
+    generationProfile: section.generationProfile,
+    generationMode: section.generationMode,
+    generationStrategyIds: section.generationStrategyIds
+      ? [...section.generationStrategyIds]
+      : undefined,
+    generationContentForms: section.generationContentForms
+      ? [...section.generationContentForms]
+      : undefined,
+    generationCustomInstructions: section.generationCustomInstructions,
     origin: section.origin,
     verificationStatus: section.verificationStatus,
     createdAt: timestamp,
@@ -219,6 +261,15 @@ export function normalizeSectionVersions(state: WorkspaceState): void {
         generationProviderId: section.generationProviderId,
         generationModel: section.generationModel,
         thinkingRequested: section.thinkingRequested,
+        generationProfile: section.generationProfile,
+        generationMode: section.generationMode,
+        generationStrategyIds: section.generationStrategyIds
+          ? [...section.generationStrategyIds]
+          : undefined,
+        generationContentForms: section.generationContentForms
+          ? [...section.generationContentForms]
+          : undefined,
+        generationCustomInstructions: section.generationCustomInstructions,
         origin: section.origin,
         verificationStatus: section.verificationStatus,
         createdAt: section.updatedAt,

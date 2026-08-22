@@ -7,6 +7,7 @@ import type {
   OutlineGenerateInput,
   OutlineNode,
   SectionGenerateInput,
+  SectionGenerationMode,
   SectionStreamEvent,
 } from '../../shared/contracts'
 import {
@@ -17,6 +18,7 @@ import {
 import { IPC } from '../../shared/ipc'
 import {
   analyzeOutlineArchitecture,
+  buildSectionGenerationPlan,
   buildOutlinePrompt,
   buildSectionPrompt,
   extractCitationIds,
@@ -24,6 +26,8 @@ import {
   runOutlineQualityChecks,
   runProjectQualityChecks,
   runQualityChecks,
+  type SectionGenerationPlan,
+  type SectionQualitySectionInput,
 } from '../services/pipeline'
 import { WorkspaceRepository } from '../services/storage/workspaceRepository'
 import { ConfigurationService } from './configuration'
@@ -152,17 +156,52 @@ export class PaperCoordinator {
       this.configuration.providerSecret(input.providerId),
       { requestTimeoutMs: 240_000 },
     )
-    const messages = buildSectionPrompt(state, input.projectId, input.sectionId)
+    const outlineContext = findOutlineContext(
+      state.outlines[input.projectId] ?? [],
+      section.outlineNodeId,
+    )
+    const outlineNode = outlineContext.node
+    const architecture = state.outlineArchitectures?.[input.projectId]
+    const generationPlan = buildSectionGenerationPlan({
+      title: section.title,
+      node: outlineNode ?? { title: section.title, level: section.level },
+      parent: outlineContext.parent,
+      ancestors: outlineContext.ancestors,
+      children: outlineNode?.children,
+      brief: project.brief,
+      architecture,
+      hasRealData: architecture?.dataAvailable,
+    }, input.options)
+    assertSupportedGenerationOptions(input, generationPlan)
+    const generationMode: SectionGenerationMode = input.options?.mode
+      ?? (section.content.trim() ? 'revise' : 'initial')
+    const generationMetadata = {
+      generationProfile: generationPlan.profile,
+      generationMode,
+      generationStrategyIds: [...generationPlan.strategyIds],
+      generationContentForms: [...generationPlan.selectedContentForms],
+      generationCustomInstructions: input.options?.customInstructions?.trim() || undefined,
+    }
+    const messages = buildSectionPrompt(state, input.projectId, input.sectionId, {
+      generationPlan,
+      mode: generationMode,
+      customInstructions: generationMetadata.generationCustomInstructions,
+    })
     const run = createPaperRun(input.projectId, 'write', [
-      ['准备章节上下文', `已锁定“${section.title}”及其引用范围`, 'completed'],
+      [
+        '识别章节职责',
+        `已识别为“${generationPlan.profileLabel}”，采用${formatStrategyLabels(generationPlan.strategyIds)}`,
+        'completed',
+      ],
       ['生成章节草稿', `正在使用 ${profile.name} / ${input.model}`, 'running'],
-      ['检查引用与篇幅', '等待章节生成完成', 'pending'],
+      ['检查引用、职责与表达', '等待章节生成完成', 'pending'],
     ])
     const thinkingRequested = usesExplicitDeepSeekThinking(profile, input.model)
     const generation = await this.repository.beginSectionGeneration(input.sectionId, {
       generationProviderId: profile.id,
       generationModel: input.model,
       thinkingRequested,
+      ...generationMetadata,
     })
     let content = ''
     let reasoningContent = ''
@@ -208,6 +247,7 @@ export class PaperCoordinator {
           generationProviderId: profile.id,
           generationModel: input.model,
           thinkingRequested,
+          ...generationMetadata,
           generationError: undefined,
         },
       )
@@ -236,12 +276,21 @@ export class PaperCoordinator {
       })
       await this.repository.replaceSectionCitations(input.sectionId, citations)
 
-      const outlineNode = findOutlineNode(state.outlines[input.projectId] ?? [], section.outlineNodeId)
       const quality = runQualityChecks(content, {
         targetWords: outlineNode?.targetWords,
         language: project.brief.language,
         allowedCitationIds: included.map((item) => item.id),
         requireCitations: included.length > 0,
+        sectionQuality: {
+          sectionId: section.id,
+          projectId: input.projectId,
+          sectionTitle: section.title,
+          profile: generationPlan.profile,
+          role: outlineNode?.role,
+          keyClaims: outlineNode?.keyClaims,
+          evidenceNeeds: outlineNode?.evidenceNeeds,
+          peerSections: buildPeerSectionQualityInputs(state, input.projectId, section.id),
+        },
       })
       const hasConcern = quality.issues.some((issue) => issue.severity !== 'info')
       const completedAt = now()
@@ -292,6 +341,7 @@ export class PaperCoordinator {
                 generationProviderId: profile.id,
                 generationModel: input.model,
                 thinkingRequested,
+                ...generationMetadata,
                 generationError: message,
               },
             )
@@ -300,6 +350,7 @@ export class PaperCoordinator {
               generationProviderId: profile.id,
               generationModel: input.model,
               thinkingRequested,
+              ...generationMetadata,
               generationError: message,
             })
       } catch {
@@ -467,6 +518,81 @@ function findOutlineNode(nodes: OutlineNode[], nodeId: string): OutlineNode | un
     if (nested) return nested
   }
   return undefined
+}
+
+interface OutlineContext {
+  node?: OutlineNode
+  parent?: OutlineNode
+  ancestors: OutlineNode[]
+}
+
+function findOutlineContext(nodes: OutlineNode[], nodeId: string): OutlineContext {
+  const visit = (items: OutlineNode[], ancestors: OutlineNode[]): OutlineContext | undefined => {
+    for (const node of items) {
+      if (node.id === nodeId) {
+        return {
+          node,
+          parent: ancestors.at(-1),
+          ancestors,
+        }
+      }
+      const nested = visit(node.children, [...ancestors, node])
+      if (nested) return nested
+    }
+    return undefined
+  }
+  return visit(nodes, []) ?? { ancestors: [] }
+}
+
+function assertSupportedGenerationOptions(
+  input: SectionGenerateInput,
+  plan: SectionGenerationPlan,
+): void {
+  if (input.options?.contentForms?.length && plan.unsupportedContentForms.length > 0) {
+    throw new Error(`当前章节不适合以下内容形态：${plan.unsupportedContentForms.join('、')}。`)
+  }
+  const strategies = new Set(input.options?.strategyIds ?? [])
+  if (strategies.has('argument-deepening') && strategies.has('concise')) {
+    throw new Error('“论证深化”和“精炼表达”不能同时作为本次生成主策略。')
+  }
+}
+
+function formatStrategyLabels(strategies: SectionGenerationPlan['strategyIds']): string {
+  const labels = strategies.map((strategy) => {
+    if (strategy === 'evidence-first') return '证据优先'
+    if (strategy === 'argument-deepening') return '论证深化'
+    if (strategy === 'natural-academic') return '自然学术'
+    return '精炼表达'
+  })
+  return labels.length > 0 ? `“${labels.join(' + ')}”策略` : '章节默认约束'
+}
+
+function buildPeerSectionQualityInputs(
+  state: ReturnType<WorkspaceRepository['snapshot']>,
+  projectId: string,
+  currentSectionId: string,
+): SectionQualitySectionInput[] {
+  const outline = state.outlines[projectId] ?? []
+  return state.sections
+    .filter((section) => (
+      section.projectId === projectId
+      && section.id !== currentSectionId
+      && !section.derivedFromSectionId
+      && Boolean(section.content.trim())
+    ))
+    .map((section) => {
+      const node = findOutlineNode(outline, section.outlineNodeId)
+      return {
+        id: section.id,
+        projectId,
+        title: section.title,
+        content: section.content,
+        profile: section.generationProfile,
+        role: node?.role,
+        keyClaims: node?.keyClaims,
+        evidenceNeeds: node?.evidenceNeeds,
+      }
+    })
 }
 
 function findCitationClaim(content: string, citationId: string): string {

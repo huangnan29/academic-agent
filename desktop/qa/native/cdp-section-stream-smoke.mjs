@@ -23,7 +23,7 @@ async function main() {
     await waitFor("Boolean(document.querySelector('.view-switcher') && window.paperAgent?.section?.onEvent)")
     await clickButtonText('.view-switcher button', '文稿')
     await waitFor("Boolean(document.querySelector('.manuscript-view'))")
-    await clickButtonText('.manuscript-toolbar button', '生成本章')
+    await clickFirstButtonText('.manuscript-toolbar button', ['生成本章', '重新生成'])
     await waitFor("Boolean(document.querySelector('.section-streaming-label'))")
     await waitFor("Boolean(document.querySelector('.thinking-block.is-streaming'))")
     await waitFor("(document.querySelector('.section-streaming-content .markdown-body')?.textContent?.length ?? 0) > 20")
@@ -51,6 +51,29 @@ async function main() {
     const completed = await sectionSnapshot()
     if (completed.status !== '草稿' || completed.contentLength <= later.contentLength || !completed.thinkingLabel?.includes('思考过程')) {
       throw new Error(`章节完成态不正确：${JSON.stringify(completed)}`)
+    }
+    const generationMetadata = await evaluate(`(async () => {
+      const state = await window.paperAgent.workspace.get()
+      const project = state.projects.find((item) => item.id === state.settings.activeProjectId) ?? state.projects[0]
+      const section = state.sections.find((item) => item.id === project?.activeSectionId)
+      const version = state.sectionVersions.find((item) => item.id === section?.activeGenerationVersionId)
+      return {
+        profile: section?.generationProfile,
+        mode: section?.generationMode,
+        strategies: section?.generationStrategyIds,
+        versionProfile: version?.generationProfile,
+        versionStrategies: version?.generationStrategyIds,
+        visibleMetadata: [...document.querySelectorAll('.section-generation-model')]
+          .map((item) => item.textContent?.replace(/\s+/g, ' ').trim()),
+      }
+    })()`)
+    if (!generationMetadata.profile
+      || generationMetadata.mode !== 'initial'
+      || generationMetadata.strategies?.length === 0
+      || generationMetadata.versionProfile !== generationMetadata.profile
+      || JSON.stringify(generationMetadata.versionStrategies) !== JSON.stringify(generationMetadata.strategies)
+      || !generationMetadata.visibleMetadata.some((item) => item?.includes('证据优先') || item?.includes('自然学术') || item?.includes('论证深化') || item?.includes('精炼表达'))) {
+      throw new Error(`章节感知元数据没有完整落盘或显示：${JSON.stringify(generationMetadata)}`)
     }
     await capture(`${outputDir}/section-completed.png`)
 
@@ -80,7 +103,7 @@ async function main() {
     await capture(`${outputDir}/manuscript-message-opened-chat.png`)
 
     if (runtimeErrors.length > 0) throw new Error(`原生章节流界面存在运行时错误：${runtimeErrors.join('；')}`)
-    process.stdout.write(`${JSON.stringify({ ok: true, early, later, completed, chatTransition, runtimeErrors }, null, 2)}\n`)
+    process.stdout.write(`${JSON.stringify({ ok: true, early, later, completed, generationMetadata, chatTransition, runtimeErrors }, null, 2)}\n`)
   } finally {
     client.close()
   }
@@ -100,6 +123,16 @@ async function clickButtonText(selector, text) {
   await evaluate(`(() => {
     const button = [...document.querySelectorAll(${JSON.stringify(selector)})].find((item) => item.textContent?.includes(${JSON.stringify(text)}))
     if (!(button instanceof HTMLElement)) throw new Error('找不到按钮：${text}')
+    button.click()
+  })()`)
+}
+
+async function clickFirstButtonText(selector, labels) {
+  await evaluate(`(() => {
+    const labels = ${JSON.stringify(labels)}
+    const button = [...document.querySelectorAll(${JSON.stringify(selector)})]
+      .find((item) => labels.some((label) => item.textContent?.includes(label)))
+    if (!(button instanceof HTMLElement)) throw new Error('找不到按钮：' + labels.join(' / '))
     button.click()
   })()`)
 }

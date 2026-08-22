@@ -21,6 +21,45 @@ export const now = () => new Date().toISOString()
 export const makeId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 export const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
+/**
+ * fallback 的章节与历史版本共用生成元数据复制规则；数组字段必须复制，
+ * 这样演示层的当前章节和历史快照不会共享可变引用。
+ */
+function copySectionGenerationMetadata(
+  target: Pick<ManuscriptSection, 'reasoningContent'
+    | 'generationProviderId'
+    | 'generationModel'
+    | 'thinkingRequested'
+    | 'generationProfile'
+    | 'generationMode'
+    | 'generationStrategyIds'
+    | 'generationContentForms'
+    | 'generationCustomInstructions'>,
+  source: Pick<ManuscriptSection, 'reasoningContent'
+    | 'generationProviderId'
+    | 'generationModel'
+    | 'thinkingRequested'
+    | 'generationProfile'
+    | 'generationMode'
+    | 'generationStrategyIds'
+    | 'generationContentForms'
+    | 'generationCustomInstructions'>,
+): void {
+  target.reasoningContent = source.reasoningContent
+  target.generationProviderId = source.generationProviderId
+  target.generationModel = source.generationModel
+  target.thinkingRequested = source.thinkingRequested
+  target.generationProfile = source.generationProfile
+  target.generationMode = source.generationMode
+  target.generationStrategyIds = source.generationStrategyIds
+    ? [...source.generationStrategyIds]
+    : undefined
+  target.generationContentForms = source.generationContentForms
+    ? [...source.generationContentForms]
+    : undefined
+  target.generationCustomInstructions = source.generationCustomInstructions
+}
+
 export function flattenOutline(nodes: OutlineNode[]): OutlineNode[] {
   return nodes.flatMap((node) => [node, ...flattenOutline(node.children)])
 }
@@ -91,15 +130,12 @@ export function makeSectionVersion(
     content: section.content,
     wordCount: section.content.replace(/\s+/g, '').length,
     status: source === 'partial' ? 'error' : section.status === 'verified' ? 'verified' : 'draft',
-    reasoningContent: section.reasoningContent,
-    generationProviderId: section.generationProviderId,
-    generationModel: section.generationModel,
-    thinkingRequested: section.thinkingRequested,
     origin: section.origin,
     verificationStatus: section.verificationStatus,
     createdAt: timestamp,
     updatedAt: timestamp,
   }
+  copySectionGenerationMetadata(version, section)
   state.sectionVersions.push(version)
   section.activeGenerationVersionId = version.id
   return version

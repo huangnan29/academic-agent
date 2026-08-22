@@ -1,4 +1,11 @@
-import type { WorkspaceState } from '../../../shared/contracts'
+import type { OutlineNode, WorkspaceState } from '../../../shared/contracts'
+import {
+  runProjectSectionQualityChecks,
+  runSectionQualityChecks,
+  type SectionQualityMetrics,
+  type SectionQualityOptions,
+  type SectionQualitySectionInput,
+} from './section-quality'
 
 export type QualityIssueSeverity = 'error' | 'warning' | 'info'
 
@@ -15,12 +22,18 @@ export interface QualityCheckOptions {
   language?: 'zh-CN' | 'en'
   allowedCitationIds?: string[]
   requireCitations?: boolean
+  /** 阶段 2 的章节风格与职责检查；默认开启，所有新增项均为 warning。 */
+  sectionQuality?: SectionQualityOptions
+  /** 项目级检查会先关闭合并正文的风格检查，再按主稿章节逐章检查。 */
+  includeStyleChecks?: boolean
 }
 
 export interface QualityReport {
   passed: boolean
   score: number
   issues: QualityIssue[]
+  /** 启发式风格指标仅作提示，不参与 passed 的硬错误判断。 */
+  styleMetrics?: SectionQualityMetrics
   metrics: {
     wordCount: number
     headingCount: number
@@ -29,6 +42,15 @@ export interface QualityReport {
     unmappedCitationCount: number
   }
 }
+
+const STYLE_ONLY_ISSUE_CODES = new Set([
+  'BOILERPLATE_DENSITY',
+  'REPEATED_PARAGRAPH_OPENING',
+  'UNIFORM_SENTENCE_LENGTH',
+  'CROSS_SECTION_DUPLICATE',
+  'SECTION_RESPONSIBILITY_GAP',
+  'CLAIM_EVIDENCE_COVERAGE',
+])
 
 export function runQualityChecks(
   content: string,
@@ -125,20 +147,23 @@ export function runQualityChecks(
     })
   }
 
+  let styleMetrics: SectionQualityMetrics | undefined
+  if (options.includeStyleChecks !== false) {
+    const styleReport = runSectionQualityChecks(text, options.sectionQuality)
+    issues.push(...styleReport.issues)
+    styleMetrics = styleReport.metrics
+  }
+
   const score = Math.max(
     0,
-    100 -
-      issues.reduce((total, issue) => {
-        if (issue.severity === 'error') return total + 25
-        if (issue.severity === 'warning') return total + 10
-        return total + 2
-      }, 0),
+    100 - issues.reduce((total, issue) => total + qualityIssuePenalty(issue), 0),
   )
 
   return {
     passed: issues.every((issue) => issue.severity !== 'error'),
     score,
     issues,
+    styleMetrics,
     metrics: {
       wordCount,
       headingCount: headings.length,
@@ -152,9 +177,10 @@ export function runQualityChecks(
 export function runProjectQualityChecks(state: WorkspaceState, projectId: string): QualityReport {
   const project = state.projects.find((item) => item.id === projectId)
   if (!project) throw new Error('找不到要检查的论文项目。')
-  const content = state.sections
+  const mainSections = state.sections
     // 同步小节已经包含在父章节主稿中，不应再次计入篇幅和质量检查。
     .filter((section) => section.projectId === projectId && !section.derivedFromSectionId)
+  const content = mainSections
     // 项目标题在导出稿中占用一级标题，章节从二级标题开始，和 Markdown 导出保持一致。
     .map((section) => `${'#'.repeat(section.level + 1)} ${section.title}\n\n${section.content}`)
     .join('\n\n')
@@ -162,12 +188,73 @@ export function runProjectQualityChecks(state: WorkspaceState, projectId: string
     .filter((item) => item.projectId === projectId && item.included)
     .map((item) => item.id)
 
-  return runQualityChecks(content, {
+  const report = runQualityChecks(content, {
     targetWords: project.brief.targetWords,
     language: project.brief.language,
     allowedCitationIds: citationIds,
     requireCitations: citationIds.length > 0,
+    includeStyleChecks: false,
   })
+  const outlineById = new Map<string, OutlineNode>()
+  flattenOutline(state.outlines[projectId] ?? []).forEach((node) => outlineById.set(node.id, node))
+  const sectionInputs: SectionQualitySectionInput[] = mainSections
+    .filter((section) => Boolean(section.content.trim()))
+    .map((section) => {
+    const node = outlineById.get(section.outlineNodeId)
+    return {
+      id: section.id,
+      projectId: section.projectId,
+      title: section.title,
+      content: section.content,
+      derivedFromSectionId: section.derivedFromSectionId,
+      profile: section.generationProfile,
+      role: node?.role,
+      keyClaims: node?.keyClaims,
+      evidenceNeeds: node?.evidenceNeeds,
+    }
+    })
+  const sectionReport = runProjectSectionQualityChecks(sectionInputs, { projectId })
+  return appendQualityIssues(report, sectionReport.issues, sectionReport.metrics)
+}
+
+function appendQualityIssues(
+  report: QualityReport,
+  additionalIssues: QualityIssue[],
+  styleMetrics?: SectionQualityMetrics,
+): QualityReport {
+  if (additionalIssues.length === 0) {
+    return styleMetrics ? { ...report, styleMetrics } : report
+  }
+  const issues = [...report.issues, ...additionalIssues]
+  const score = Math.max(
+    0,
+    100 - issues.reduce((total, issue) => total + qualityIssuePenalty(issue), 0),
+  )
+  return {
+    ...report,
+    passed: issues.every((issue) => issue.severity !== 'error'),
+    score,
+    issues,
+    styleMetrics: styleMetrics ?? report.styleMetrics,
+  }
+}
+
+function qualityIssuePenalty(issue: QualityIssue): number {
+  // 风格与职责检查是启发式提示，不参与传统质量分，也不能改变 passed。
+  if (STYLE_ONLY_ISSUE_CODES.has(issue.code)) return 0
+  if (issue.severity === 'error') return 25
+  if (issue.severity === 'warning') return 10
+  return 2
+}
+
+function flattenOutline(nodes: OutlineNode[]): OutlineNode[] {
+  const flattened: OutlineNode[] = []
+  const visit = (node: OutlineNode) => {
+    flattened.push(node)
+    node.children.forEach(visit)
+  }
+  nodes.forEach(visit)
+  return flattened
 }
 
 export function countWords(content: string, language?: 'zh-CN' | 'en'): number {
