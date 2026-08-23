@@ -56,4 +56,3 @@ export function normalizeSkillInstructions(value: string): string {
     .replace(/\r\n?/g, '\n')
     .trim()
 }
-

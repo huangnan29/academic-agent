@@ -44,4 +44,3 @@ export interface DiscoveryOptions {
   maxListPages: number
   requestTimeoutMs: number
 }
-

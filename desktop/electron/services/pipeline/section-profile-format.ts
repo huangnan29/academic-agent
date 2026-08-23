@@ -35,5 +35,3 @@ export function formatSectionGenerationPlan(plan: SectionGenerationPlan): string
 
 /** 兼容 prompt/directives 命名；不生成任何模型内容。 */
 export const formatSectionProfilePrompt = formatSectionGenerationPlan
-
-

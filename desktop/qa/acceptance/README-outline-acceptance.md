@@ -116,4 +116,3 @@ node desktop/qa/acceptance/outline-acceptance.mjs \
 ## 当前边界
 
 本轮只新增 `desktop/qa/` 下的基线、适配器、验收脚本和说明。最终分类/质量函数仍由 pipeline 实现；在它们尚未导出前，运行脚本会如实报告适配契约阻塞，不以占位结果代替验收。
-

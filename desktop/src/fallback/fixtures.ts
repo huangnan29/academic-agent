@@ -420,5 +420,3 @@ export const demoOutline: OutlineNode[] = [
     ],
   },
 ]
-
-

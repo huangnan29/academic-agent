@@ -626,4 +626,3 @@ body.is-resizing-panel {
   font-size: calc(9px * var(--ui-font-scale, 1));
   line-height: 1.45;
 }
-

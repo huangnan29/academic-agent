@@ -300,4 +300,3 @@ export function buildContentFormPurpose(
 export function isDataBearingProfile(profile: SectionProfile): boolean {
   return profile === 'result-implementation' || profile === 'method-design';
 }
-

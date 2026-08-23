@@ -189,4 +189,3 @@ export function formatSelectedContextReferences(state: WorkspaceState, input: Ch
 
   return blocks.length > 2 ? blocks.join('\n\n') : ''
 }
-

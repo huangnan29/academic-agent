@@ -476,4 +476,3 @@ function uniqueStrings(values: string[]): string[] {
 function isSectionProfile(value: unknown): value is SectionProfile {
   return typeof value === 'string' && PROFILE_ORDER.includes(value as SectionProfile)
 }
-
