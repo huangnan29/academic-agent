@@ -16,6 +16,7 @@ import type {
   ProviderInput,
   ResearchBrief,
   SectionGenerateInput,
+  SectionGenerationPreviewInput,
   SectionStreamEvent,
   SidebarPreferencesInput,
   SkillInput,
@@ -100,6 +101,8 @@ const api = {
       ipcRenderer.invoke(IPC.outlineSave, projectId, outline),
   },
   section: {
+    previewGeneration: (input: SectionGenerationPreviewInput) =>
+      ipcRenderer.invoke(IPC.sectionPreviewGeneration, input),
     generate: (input: SectionGenerateInput) => ipcRenderer.invoke(IPC.sectionGenerate, input),
     save: (sectionId: string, content: string) =>
       ipcRenderer.invoke(IPC.sectionSave, sectionId, content),

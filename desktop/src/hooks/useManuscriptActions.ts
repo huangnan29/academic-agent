@@ -1,7 +1,9 @@
-import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import type {
   ManuscriptSection,
   Project,
+  SectionGenerationOptions,
+  SectionGenerationPreview,
   WorkspaceState,
 } from '../../shared/contracts'
 import { paperAgent } from '../fallback'
@@ -50,6 +52,12 @@ export function useManuscriptActions({
   const [selectingSectionVersionId, setSelectingSectionVersionId] = useState<string>()
   const [generatingOutline, setGeneratingOutline] = useState(false)
   const [regenerateOutlineOpen, setRegenerateOutlineOpen] = useState(false)
+  const [sectionGenerationPanelOpen, setSectionGenerationPanelOpen] = useState(false)
+  const [sectionGenerationPreview, setSectionGenerationPreview] = useState<SectionGenerationPreview>()
+  const [sectionGenerationPreviewLoading, setSectionGenerationPreviewLoading] = useState(false)
+  const [sectionGenerationPreviewError, setSectionGenerationPreviewError] = useState<string>()
+  const [sectionGenerationSubmitting, setSectionGenerationSubmitting] = useState(false)
+  const previewRequestRef = useRef(0)
 
   useEffect(() => {
     if (selectedSection && selectedSection.id !== selectedSectionId) setSelectedSectionId(selectedSection.id)
@@ -59,6 +67,9 @@ export function useManuscriptActions({
     setSectionDraft(selectedSection?.content ?? '')
     setEditingSection(false)
     setSelectingSectionVersionId(undefined)
+    setSectionGenerationPanelOpen(false)
+    setSectionGenerationPreview(undefined)
+    setSectionGenerationPreviewError(undefined)
   }, [selectedSection?.activeGenerationVersionId, selectedSection?.id])
 
   const selectSection = async (section: ManuscriptSection) => {
@@ -106,7 +117,7 @@ export function useManuscriptActions({
     }
   }
 
-  const generateSection = async () => {
+  const generateSection = async (options?: SectionGenerationOptions) => {
     if (!activeProject || !selectedSection) return
     if (sectionGenerationCandidate) {
       showToast('已有章节正在生成，请等待完成后再开始下一章', 'error')
@@ -137,7 +148,13 @@ export function useManuscriptActions({
       return next
     })
     try {
-      await paperAgent.section.generate({ projectId: activeProject.id, sectionId, providerId: activeProviderId, model: activeModel })
+      await paperAgent.section.generate({
+        projectId: activeProject.id,
+        sectionId,
+        providerId: activeProviderId,
+        model: activeModel,
+        options,
+      })
       await refreshWorkspace()
       setSectionGenerationCandidate((current) => current?.sectionId === sectionId ? undefined : current)
       showToast('章节草稿已生成')
@@ -145,6 +162,61 @@ export function useManuscriptActions({
       await refreshWorkspace().catch(() => undefined)
       setSectionGenerationCandidate((current) => current?.sectionId === sectionId ? undefined : current)
       showToast('章节生成中断，已保留模型返回的正文片段', 'error')
+    }
+  }
+
+  const loadSectionGenerationPreview = async (options?: SectionGenerationOptions) => {
+    if (!activeProject || !selectedSection) return undefined
+    const requestId = previewRequestRef.current + 1
+    previewRequestRef.current = requestId
+    setSectionGenerationPreviewLoading(true)
+    setSectionGenerationPreviewError(undefined)
+    try {
+      const preview = await paperAgent.section.previewGeneration({
+        projectId: activeProject.id,
+        sectionId: selectedSection.id,
+        options,
+      })
+      if (previewRequestRef.current !== requestId) return preview
+      setSectionGenerationPreview(preview)
+      return preview
+    } catch (error) {
+      if (previewRequestRef.current === requestId) {
+        setSectionGenerationPreviewError(error instanceof Error ? error.message : '无法读取章节生成配置')
+      }
+      return undefined
+    } finally {
+      if (previewRequestRef.current === requestId) setSectionGenerationPreviewLoading(false)
+    }
+  }
+
+  const openSectionGenerationPanel = () => {
+    if (!selectedSection?.content.trim()) {
+      void generateSection()
+      return
+    }
+    if (selectedSection.status === 'generating' || sectionGenerationCandidate || sectionGenerationSubmitting) {
+      showToast('已有章节正在生成，请等待完成后再开始下一章', 'error')
+      return
+    }
+    setSectionGenerationPanelOpen(true)
+    setSectionGenerationPreview(undefined)
+    void loadSectionGenerationPreview()
+  }
+
+  const closeSectionGenerationPanel = () => {
+    if (sectionGenerationSubmitting) return
+    setSectionGenerationPanelOpen(false)
+  }
+
+  const submitSectionGeneration = async (options: SectionGenerationOptions) => {
+    if (sectionGenerationSubmitting) return
+    setSectionGenerationSubmitting(true)
+    setSectionGenerationPanelOpen(false)
+    try {
+      await generateSection(options)
+    } finally {
+      setSectionGenerationSubmitting(false)
     }
   }
 
@@ -196,6 +268,15 @@ export function useManuscriptActions({
     saveSection,
     selectSectionVersion,
     generateSection,
+    openSectionGenerationPanel,
+    closeSectionGenerationPanel,
+    loadSectionGenerationPreview,
+    submitSectionGeneration,
+    sectionGenerationPanelOpen,
+    sectionGenerationPreview,
+    sectionGenerationPreviewLoading,
+    sectionGenerationPreviewError,
+    sectionGenerationSubmitting,
     generateOutline,
   }
 }

@@ -730,6 +730,29 @@ export interface SectionGenerateInput {
   options?: SectionGenerationOptions
 }
 
+export interface SectionGenerationPreviewInput {
+  projectId: string
+  sectionId: string
+  options?: SectionGenerationOptions
+}
+
+/** 重新生成面板展示的确定性计划，不包含模型 Thinking 或未核验推断。 */
+export interface SectionGenerationPreview {
+  profile: SectionProfile
+  profileLabel: string
+  profileSummary: string
+  mode: SectionGenerationMode
+  strategyIds: SectionOptimizationStrategy[]
+  defaultStrategyIds: SectionOptimizationStrategy[]
+  availableContentForms: SectionContentForm[]
+  selectedContentForms: SectionContentForm[]
+  unsupportedContentForms: SectionContentForm[]
+  dataBoundary: string
+  currentWordCount: number
+  includedLiteratureCount: number
+  generatedSectionCount: number
+}
+
 export interface SectionVersionSelectInput {
   sectionId: string
   versionId: string

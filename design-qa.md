@@ -496,4 +496,14 @@
 - 同一打包应用随后完成 21 项正常/菜单/设置/对话框交互和 4 项重启恢复，均为 0 失败、0 运行时错误；证据：`output/native-section-aware-generation-final/regression/`。
 - 边界：本轮使用本地 Mock 验证真实调用链与元数据，不代表真实模型写作质量盲评已经通过；没有新增重新生成策略弹窗。
 
+## 35. 章节重新生成策略面板原生验收（2026-08-23）
+
+- 已有正文点击“重新生成”直接打开配置面板；初始状态为 revise、自动识别“绪论 / 问题提出”、证据优先 + 自然学术，并显示本地 Mock 模型、3991 字、0 篇已纳入文献、1 个已生成章节和数据边界。
+- 手动切换为“综述 / 理论”后，面板使用后端返回的职责摘要和默认策略；“论证深化 + 精炼表达”显示明确冲突，最终使用论证深化 + 自然学术。
+- 选择表格并输入唯一补充要求后提交，面板关闭并进入真实正文/Thinking 流；完成后工具栏显示“综述 / 理论 · 论证深化 + 自然学术”。
+- 当前章节与活动历史版本均保存 `literature-review`、`rewrite`、`argument-deepening + natural-academic`、`table` 和相同补充要求，运行时错误为 0。
+- 证据：`output/native-section-generation-panel-final/section-generation-panel.png`、`section-generation-configured.png`、`section-generation-completed.png`、`summary.json`。
+- 同一打包应用的 21 项正常/菜单/设置/对话框回归与 4 项退出重启恢复均通过，运行时错误为 0；证据：`output/native-section-generation-panel-final/regression/`。
+- 边界：本轮使用本地 Mock，不代表真实模型写作质量已通过；没有新增二次模型修订。
+
 final result: passed

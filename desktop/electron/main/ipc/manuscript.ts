@@ -7,6 +7,7 @@ import {
   outlineGenerateSchema,
   outlineSchema,
   sectionGenerateSchema,
+  sectionGenerationPreviewSchema,
 } from '../schemas'
 import { assertId, assertOutlineBounds, sanitizeOutlineNode } from './common'
 import { handle } from './runtime'
@@ -54,6 +55,10 @@ export function registerManuscriptHandlers(
 
   register(IPC.sectionGenerate, async (event, payload: unknown) => {
     await paper.generateSection(sectionGenerateSchema.parse(payload), event.sender)
+  })
+
+  register(IPC.sectionPreviewGeneration, async (_event, payload: unknown) => {
+    return paper.previewSectionGeneration(sectionGenerationPreviewSchema.parse(payload))
   })
 
   register(IPC.sectionSave, async (_event, sectionId: unknown, content: unknown) => {

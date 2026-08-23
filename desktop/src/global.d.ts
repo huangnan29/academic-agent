@@ -21,6 +21,8 @@ import type {
   ProviderInput,
   ProviderProfile,
   SectionGenerateInput,
+  SectionGenerationPreview,
+  SectionGenerationPreviewInput,
   SectionStreamEvent,
   SidebarPreferencesInput,
   SkillDefinition,
@@ -93,6 +95,7 @@ declare global {
         save(projectId: string, outline: OutlineNode[]): Promise<OutlineNode[]>
       }
       section: {
+        previewGeneration(input: SectionGenerationPreviewInput): Promise<SectionGenerationPreview>
         generate(input: SectionGenerateInput): Promise<void>
         save(sectionId: string, content: string): Promise<void>
         setActive(sectionId: string): Promise<WorkspaceState>

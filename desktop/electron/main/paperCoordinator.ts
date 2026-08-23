@@ -7,7 +7,8 @@ import type {
   OutlineGenerateInput,
   OutlineNode,
   SectionGenerateInput,
-  SectionGenerationMode,
+  SectionGenerationPreview,
+  SectionGenerationPreviewInput,
   SectionStreamEvent,
 } from '../../shared/contracts'
 import {
@@ -18,7 +19,6 @@ import {
 import { IPC } from '../../shared/ipc'
 import {
   analyzeOutlineArchitecture,
-  buildSectionGenerationPlan,
   buildOutlinePrompt,
   buildSectionPrompt,
   extractCitationIds,
@@ -31,6 +31,16 @@ import {
 } from '../services/pipeline'
 import { WorkspaceRepository } from '../services/storage/workspaceRepository'
 import { ConfigurationService } from './configuration'
+import {
+  assertProtectedOutlineNodesPreserved,
+  assertSupportedGenerationOptions,
+  collectProtectedOutlineNodes,
+  filterOutlineCitations,
+  findOutlineNode,
+  formatOutlineRegenerationConstraints,
+  resolveSectionGeneration,
+  toSectionGenerationPreview,
+} from './paperCoordinatorPlanning'
 
 const MAX_GENERATED_CONTENT_CHARS = 2_000_000
 // 三级大纲同时要求专业路由、层级展开和严格 JSON；思考模型首包较慢，使用提供方默认的十分钟上限，避免三分钟误判超时。
@@ -156,25 +166,15 @@ export class PaperCoordinator {
       this.configuration.providerSecret(input.providerId),
       { requestTimeoutMs: 240_000 },
     )
-    const outlineContext = findOutlineContext(
-      state.outlines[input.projectId] ?? [],
-      section.outlineNodeId,
+    const sectionGeneration = resolveSectionGeneration(
+      state,
+      project,
+      section,
+      input.options,
     )
+    const { outlineContext, generationPlan, generationMode } = sectionGeneration
     const outlineNode = outlineContext.node
-    const architecture = state.outlineArchitectures?.[input.projectId]
-    const generationPlan = buildSectionGenerationPlan({
-      title: section.title,
-      node: outlineNode ?? { title: section.title, level: section.level },
-      parent: outlineContext.parent,
-      ancestors: outlineContext.ancestors,
-      children: outlineNode?.children,
-      brief: project.brief,
-      architecture,
-      hasRealData: architecture?.dataAvailable,
-    }, input.options)
     assertSupportedGenerationOptions(input, generationPlan)
-    const generationMode: SectionGenerationMode = input.options?.mode
-      ?? (section.content.trim() ? 'revise' : 'initial')
     const generationMetadata = {
       generationProfile: generationPlan.profile,
       generationMode,
@@ -378,94 +378,44 @@ export class PaperCoordinator {
     }
   }
 
+  /** 返回不调用模型的章节生成计划，供重新生成面板展示。 */
+  previewSectionGeneration(input: SectionGenerationPreviewInput): SectionGenerationPreview {
+    const state = this.repository.snapshot()
+    const project = state.projects.find((item) => item.id === input.projectId)
+    const section = state.sections.find(
+      (item) => item.id === input.sectionId && item.projectId === input.projectId,
+    )
+    if (!project || !section) throw new Error('项目或论文章节不存在。')
+
+    const resolution = resolveSectionGeneration(
+      state,
+      project,
+      section,
+      input.options,
+    )
+    const includedLiteratureCount = state.literature.filter(
+      (item) => item.projectId === input.projectId && item.included && item.origin !== 'demo',
+    ).length
+    const generatedSectionCount = state.sections.filter((item) => (
+      item.projectId === input.projectId
+      && !item.derivedFromSectionId
+      && Boolean(item.content.trim())
+    )).length
+
+    return toSectionGenerationPreview(
+      resolution,
+      section,
+      includedLiteratureCount,
+      generatedSectionCount,
+    )
+  }
+
   quality(projectId: string) {
     return runProjectQualityChecks(this.repository.snapshot(), projectId)
   }
 
   private sendSection(sender: WebContents, event: SectionStreamEvent): void {
     if (!sender.isDestroyed()) sender.send(IPC.sectionEvent, event)
-  }
-}
-
-interface ProtectedOutlineNode {
-  id: string
-  title: string
-  level: 1 | 2 | 3
-  parentId?: string
-}
-
-function collectProtectedOutlineNodes(
-  state: ReturnType<WorkspaceRepository['snapshot']>,
-  projectId: string,
-): ProtectedOutlineNode[] {
-  const outline = state.outlines[projectId] ?? []
-  const identityById = new Map<string, ProtectedOutlineNode>()
-  const visit = (nodes: OutlineNode[], parentId?: string) => {
-    for (const node of nodes) {
-      identityById.set(node.id, { id: node.id, title: node.title, level: node.level, parentId })
-      visit(node.children, node.id)
-    }
-  }
-  visit(outline)
-
-  const versionSectionIds = new Set(
-    state.sectionVersions.filter((version) => version.projectId === projectId).map((version) => version.sectionId),
-  )
-  const citationSectionIds = new Set(
-    state.citations.filter((citation) => citation.projectId === projectId).map((citation) => citation.sectionId),
-  )
-  const protectedIds = new Set<string>()
-  for (const section of state.sections.filter((item) => item.projectId === projectId)) {
-    if (!section.content.trim()
-      && section.status === 'pending'
-      && !versionSectionIds.has(section.id)
-      && !citationSectionIds.has(section.id)) continue
-    protectedIds.add(section.outlineNodeId)
-  }
-
-  for (const id of [...protectedIds]) {
-    let current = identityById.get(id)
-    while (current?.parentId) {
-      protectedIds.add(current.parentId)
-      current = identityById.get(current.parentId)
-    }
-  }
-  return [...protectedIds]
-    .map((id) => identityById.get(id))
-    .filter((node): node is ProtectedOutlineNode => Boolean(node))
-}
-
-function formatOutlineRegenerationConstraints(nodes: ProtectedOutlineNode[]): string {
-  return [
-    '## 重新生成时必须保留的既有正文结构',
-    '以下节点已经关联正文、历史版本或引用证据。重新规划时必须逐项保留其 id、标题、level 与 parentId；只能调整其他尚未写作的节点。不得移动、改名或删除这些节点。',
-    JSON.stringify(nodes),
-  ].join('\n')
-}
-
-function assertProtectedOutlineNodesPreserved(
-  outline: OutlineNode[],
-  protectedNodes: ProtectedOutlineNode[],
-): void {
-  if (protectedNodes.length === 0) return
-  const generated = new Map<string, ProtectedOutlineNode>()
-  const visit = (nodes: OutlineNode[], parentId?: string) => {
-    for (const node of nodes) {
-      generated.set(node.id, { id: node.id, title: node.title, level: node.level, parentId })
-      visit(node.children, node.id)
-    }
-  }
-  visit(outline)
-
-  const changed = protectedNodes.find((current) => {
-    const next = generated.get(current.id)
-    return !next
-      || next.title.normalize('NFKC').trim() !== current.title.normalize('NFKC').trim()
-      || next.level !== current.level
-      || next.parentId !== current.parentId
-  })
-  if (changed) {
-    throw new Error(`模型未能安全保留已有正文对应的章节“${changed.title}”，旧大纲已保持不变。请重试。`)
   }
 }
 
@@ -492,68 +442,6 @@ function createPaperRun(
     verificationStatus: 'unverified',
     createdAt: timestamp,
     updatedAt: timestamp,
-  }
-}
-
-function filterOutlineCitations(
-  nodes: OutlineNode[],
-  allowed: Set<string>,
-): { outline: OutlineNode[]; removedCitationCount: number } {
-  let removedCitationCount = 0
-  const visit = (node: OutlineNode): OutlineNode => {
-    const citationIds = node.citationIds.filter((id) => {
-      const keep = allowed.has(id)
-      if (!keep) removedCitationCount += 1
-      return keep
-    })
-    return { ...node, citationIds, children: node.children.map(visit) }
-  }
-  return { outline: nodes.map(visit), removedCitationCount }
-}
-
-function findOutlineNode(nodes: OutlineNode[], nodeId: string): OutlineNode | undefined {
-  for (const node of nodes) {
-    if (node.id === nodeId) return node
-    const nested = findOutlineNode(node.children, nodeId)
-    if (nested) return nested
-  }
-  return undefined
-}
-
-interface OutlineContext {
-  node?: OutlineNode
-  parent?: OutlineNode
-  ancestors: OutlineNode[]
-}
-
-function findOutlineContext(nodes: OutlineNode[], nodeId: string): OutlineContext {
-  const visit = (items: OutlineNode[], ancestors: OutlineNode[]): OutlineContext | undefined => {
-    for (const node of items) {
-      if (node.id === nodeId) {
-        return {
-          node,
-          parent: ancestors.at(-1),
-          ancestors,
-        }
-      }
-      const nested = visit(node.children, [...ancestors, node])
-      if (nested) return nested
-    }
-    return undefined
-  }
-  return visit(nodes, []) ?? { ancestors: [] }
-}
-
-function assertSupportedGenerationOptions(
-  input: SectionGenerateInput,
-  plan: SectionGenerationPlan,
-): void {
-  if (input.options?.contentForms?.length && plan.unsupportedContentForms.length > 0) {
-    throw new Error(`当前章节不适合以下内容形态：${plan.unsupportedContentForms.join('、')}。`)
-  }
-  const strategies = new Set(input.options?.strategyIds ?? [])
-  if (strategies.has('argument-deepening') && strategies.has('concise')) {
-    throw new Error('“论证深化”和“精炼表达”不能同时作为本次生成主策略。')
   }
 }
 

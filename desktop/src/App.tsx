@@ -163,6 +163,7 @@ export function App() {
     selectModel,
     exportProject,
   } = projectActions
+  const activeProvider = workspace.providers.find((provider) => provider.id === activeProviderId)
 
   const manuscriptActions = useManuscriptActions({
     workspace,
@@ -202,6 +203,15 @@ export function App() {
     saveSection,
     selectSectionVersion,
     generateSection,
+    openSectionGenerationPanel,
+    closeSectionGenerationPanel,
+    loadSectionGenerationPreview,
+    submitSectionGeneration,
+    sectionGenerationPanelOpen,
+    sectionGenerationPreview,
+    sectionGenerationPreviewLoading,
+    sectionGenerationPreviewError,
+    sectionGenerationSubmitting,
     generateOutline,
   } = manuscriptActions
 
@@ -387,16 +397,26 @@ export function App() {
                       section={displaySection}
                       sectionVersions={selectedSectionVersions}
                       generationProviderName={workspace.providers.find((provider) => provider.id === displaySection?.generationProviderId)?.name}
+                      generationModelLabel={activeModel ? `${activeProvider?.name ? `${activeProvider.name} · ` : ''}${activeModel}` : undefined}
                       canGenerateOutline={Boolean(activeProviderId && activeModel)}
                       generatingOutline={generatingOutline}
                       isEditing={editingSection}
                       draft={sectionDraft}
                       saving={savingSection}
                       selectingVersionId={selectingSectionVersionId}
+                      generationPanelOpen={sectionGenerationPanelOpen}
+                      generationPreview={sectionGenerationPreview}
+                      generationPreviewLoading={sectionGenerationPreviewLoading}
+                      generationPreviewError={sectionGenerationPreviewError}
+                      generationSubmitting={sectionGenerationSubmitting}
                       onDraft={setSectionDraft}
                       onEdit={() => setEditingSection(true)}
                       onSave={saveSection}
                       onGenerate={generateSection}
+                      onOpenGenerationPanel={openSectionGenerationPanel}
+                      onCloseGenerationPanel={closeSectionGenerationPanel}
+                      onPreviewGeneration={loadSectionGenerationPreview}
+                      onSubmitGeneration={submitSectionGeneration}
                       onSelectVersion={selectSectionVersion}
                       onGenerateOutline={generateOutline}
                       onConfigureModel={() => openSettings('configuration')}

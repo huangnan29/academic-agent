@@ -227,6 +227,9 @@ export const sectionGenerateSchema = z.object({
   }).strict().optional(),
 })
 
+export const sectionGenerationPreviewSchema = sectionGenerateSchema
+  .omit({ providerId: true, model: true })
+
 export const outlineNodeSchema: z.ZodType<OutlineNode> = z.lazy(() =>
   z.object({
     id: z.string().min(1).max(200),

@@ -1,4 +1,14 @@
-import type { ManuscriptSection, SectionGenerateInput } from '../../shared/contracts'
+import type {
+  ManuscriptSection,
+  SectionContentForm,
+  SectionGenerateInput,
+  SectionGenerationMode,
+  SectionGenerationOptions,
+  SectionGenerationPreview,
+  SectionGenerationPreviewInput,
+  SectionOptimizationStrategy,
+  SectionProfile,
+} from '../../shared/contracts'
 import { saveSectionContentInState } from '../../shared/sectionContent'
 import { emitSection, subscribeSection } from './events'
 import {
@@ -28,7 +38,120 @@ function generationMetadata(input: SectionGenerateInput): Pick<ManuscriptSection
   }
 }
 
+const PROFILE_LABELS: Record<SectionProfile, string> = {
+  abstract: '摘要',
+  introduction: '绪论 / 问题提出',
+  'literature-review': '文献综述 / 理论基础',
+  'method-design': '方法 / 研究设计',
+  'result-implementation': '结果 / 系统实现',
+  'discussion-conclusion': '讨论 / 结论',
+  'general-analysis': '通用分析',
+}
+
+const PROFILE_SUMMARIES: Record<SectionProfile, string> = {
+  abstract: '用最少篇幅交代研究问题、路径、可核验内容、结论边界和关键词。',
+  introduction: '把现实情境收束为可回答的问题，交代缺口、目标、范围和全文推进路径。',
+  'literature-review': '按主题、概念、方法或争点组织证据，比较观点和局限，定位本研究的分析位置。',
+  'method-design': '交代对象、材料、条件、变量或模块、步骤和可复现边界，让方法服务于研究问题。',
+  'result-implementation': '报告可核验的产物、观察、测量或实现证据，区分事实、分析和待验证事项。',
+  'discussion-conclusion': '回答研究问题，解释结果与既有证据的关系，交代局限和可执行的后续方向。',
+  'general-analysis': '围绕节点目标组织主张、证据、推理和边界，不套用章节模板。',
+}
+
+const DEFAULT_STRATEGIES: Record<SectionProfile, SectionOptimizationStrategy[]> = {
+  abstract: ['concise', 'evidence-first'],
+  introduction: ['evidence-first', 'natural-academic'],
+  'literature-review': ['evidence-first', 'argument-deepening'],
+  'method-design': ['evidence-first', 'concise'],
+  'result-implementation': ['evidence-first', 'argument-deepening'],
+  'discussion-conclusion': ['argument-deepening', 'natural-academic'],
+  'general-analysis': ['evidence-first', 'natural-academic'],
+}
+
+const AVAILABLE_CONTENT_FORMS: Record<SectionProfile, SectionContentForm[]> = {
+  abstract: [],
+  introduction: ['diagram'],
+  'literature-review': ['table', 'diagram'],
+  'method-design': ['table', 'diagram', 'formula', 'code'],
+  'result-implementation': ['table', 'diagram', 'formula', 'code'],
+  'discussion-conclusion': ['table', 'diagram'],
+  'general-analysis': ['table', 'diagram'],
+}
+
+function inferDemoProfile(title: string): SectionProfile {
+  const normalized = title.toLocaleLowerCase('zh-CN')
+  if (/摘要|abstract|summary/.test(normalized)) return 'abstract'
+  if (/绪论|引言|导论|问题提出|研究背景|introduction|background/.test(normalized)) return 'introduction'
+  if (/文献综述|研究综述|研究现状|理论基础|理论框架|相关工作|literature review|related work/.test(normalized)) {
+    return 'literature-review'
+  }
+  if (/方法|研究设计|方法论|技术路线|系统设计|总体设计|详细设计|methodology|research design|architecture/.test(normalized)) {
+    return 'method-design'
+  }
+  if (/结果|实验|测试|验证|实现|evaluation|results|experiments|implementation/.test(normalized)) {
+    return 'result-implementation'
+  }
+  if (/讨论|结论|结语|局限|展望|建议|discussion|conclusion|limitations/.test(normalized)) {
+    return 'discussion-conclusion'
+  }
+  return 'general-analysis'
+}
+
+function buildFallbackSectionPreview(
+  state: ReturnType<typeof readState>,
+  input: SectionGenerationPreviewInput,
+): SectionGenerationPreview {
+  const project = state.projects.find((item) => item.id === input.projectId)
+  const sourceSection = state.sections.find((item) => (
+    item.projectId === input.projectId
+      && (item.id === input.sectionId || item.outlineNodeId === input.sectionId)
+  ))
+  if (!project || !sourceSection) throw new Error('项目或论文章节不存在。')
+
+  const outline = state.outlines[input.projectId] ?? []
+  const target = findOutlineNode(outline, sourceSection.outlineNodeId)
+  const options: SectionGenerationOptions | undefined = input.options
+  const profile = options?.profile ?? inferDemoProfile(sourceSection.title)
+  const defaultStrategyIds = [...DEFAULT_STRATEGIES[profile]]
+  const strategyIds = Array.from(new Set(options?.strategyIds ?? defaultStrategyIds)).slice(0, 2)
+  const requestedForms = options?.contentForms
+    ? Array.from(new Set(options.contentForms))
+    : (target?.contentForms ?? []).filter(
+        (form): form is SectionContentForm => form !== 'prose',
+      )
+  const availableContentForms = [...AVAILABLE_CONTENT_FORMS[profile]]
+  const selectedContentForms = requestedForms.filter((form) => availableContentForms.includes(form))
+  const unsupportedContentForms = requestedForms.filter((form) => !availableContentForms.includes(form))
+  const mode: SectionGenerationMode = options?.mode
+    ?? (sourceSection.content.trim() ? 'revise' : 'initial')
+
+  return {
+    profile,
+    profileLabel: PROFILE_LABELS[profile],
+    profileSummary: PROFILE_SUMMARIES[profile],
+    mode,
+    strategyIds,
+    defaultStrategyIds,
+    availableContentForms,
+    selectedContentForms,
+    unsupportedContentForms,
+    dataBoundary: '浏览器演示预览只读取本机演示状态，不会调用真实模型或文献门户；演示稿与演示文献均不可直接作为正式论文证据。',
+    currentWordCount: sourceSection.wordCount,
+    includedLiteratureCount: state.literature.filter((item) => (
+      item.projectId === input.projectId && item.included && item.origin !== 'demo'
+    )).length,
+    generatedSectionCount: state.sections.filter((item) => (
+      item.projectId === input.projectId
+      && !item.derivedFromSectionId
+      && Boolean(item.content.trim())
+    )).length,
+  }
+}
+
 export const sectionApi: Window['paperAgent']['section'] = {
+  async previewGeneration(input) {
+    return clone(buildFallbackSectionPreview(readState(), input))
+  },
   async generate(input) {
     const outline = readState().outlines[input.projectId] ?? []
     const sourceSection = readState().sections.find(

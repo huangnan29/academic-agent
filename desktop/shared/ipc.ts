@@ -37,6 +37,7 @@ export const IPC = {
   outlineGenerate: 'outline:generate',
   outlineSave: 'outline:save',
   sectionGenerate: 'section:generate',
+  sectionPreviewGeneration: 'section:preview-generation',
   sectionEvent: 'section:event',
   sectionSave: 'section:save',
   sectionSetActive: 'section:set-active',

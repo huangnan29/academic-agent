@@ -12,7 +12,12 @@ import {
   Save,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ManuscriptSection, ManuscriptSectionVersion } from '../../shared/contracts'
+import type {
+  ManuscriptSection,
+  ManuscriptSectionVersion,
+  SectionGenerationOptions,
+  SectionGenerationPreview,
+} from '../../shared/contracts'
 import { formatSectionVersionMoment } from '../lib/format'
 import { sectionStatusLabel } from '../lib/labels'
 import { buildManuscriptDiff } from '../lib/manuscriptDiff'
@@ -23,6 +28,7 @@ import {
   StatusBadge,
   ThinkingBlock,
 } from './common'
+import { SectionGenerationPanel } from './section-generation/SectionGenerationPanel'
 
 export function ManuscriptView({
   section,
@@ -34,10 +40,20 @@ export function ManuscriptView({
   draft,
   saving,
   selectingVersionId,
+  generationModelLabel,
+  generationPanelOpen,
+  generationPreview,
+  generationPreviewLoading,
+  generationPreviewError,
+  generationSubmitting,
   onDraft,
   onEdit,
   onSave,
   onGenerate,
+  onOpenGenerationPanel,
+  onCloseGenerationPanel,
+  onPreviewGeneration,
+  onSubmitGeneration,
   onSelectVersion,
   onGenerateOutline,
   onConfigureModel,
@@ -51,10 +67,20 @@ export function ManuscriptView({
   draft: string
   saving: boolean
   selectingVersionId?: string
+  generationModelLabel?: string
+  generationPanelOpen: boolean
+  generationPreview?: SectionGenerationPreview
+  generationPreviewLoading: boolean
+  generationPreviewError?: string
+  generationSubmitting: boolean
   onDraft: (value: string) => void
   onEdit: () => void
   onSave: () => void
   onGenerate: () => void
+  onOpenGenerationPanel: () => void
+  onCloseGenerationPanel: () => void
+  onPreviewGeneration: (options: SectionGenerationOptions) => Promise<SectionGenerationPreview | undefined>
+  onSubmitGeneration: (options: SectionGenerationOptions) => void | Promise<void>
   onSelectVersion: (versionId: string) => Promise<void>
   onGenerateOutline: () => void
   onConfigureModel: () => void
@@ -130,7 +156,8 @@ export function ManuscriptView({
 
   const generating = section.status === 'generating'
   const hasVersionHistory = orderedVersions.length > 0
-  const showVersionPicker = hasVersionHistory || ['draft', 'verified', 'error'].includes(section.status)
+  const hasContent = Boolean(section.content.trim())
+  const showVersionPicker = hasVersionHistory || hasContent || ['draft', 'verified', 'error'].includes(section.status)
   const thinkingState = section.reasoningContent
     ? (generating ? 'Thinking 正在输出' : 'Thinking 已返回')
     : section.thinkingRequested
@@ -237,8 +264,8 @@ export function ManuscriptView({
               <button
                 type="button"
                 className="manuscript-regenerate-button"
-                onClick={onGenerate}
-                disabled={generating || isEditing || saving || Boolean(selectingVersionId)}
+                onClick={onOpenGenerationPanel}
+                disabled={generating || isEditing || saving || Boolean(selectingVersionId) || generationSubmitting}
                 aria-label={`重新生成章节：${section.title}`}
               >
                 <RefreshCw size={13} aria-hidden="true" /> 重新生成
@@ -263,7 +290,7 @@ export function ManuscriptView({
           )}
         </div>
         <div className="toolbar-actions">
-          {section.status === 'pending' && !hasVersionHistory && (
+          {section.status === 'pending' && !hasVersionHistory && !hasContent && (
             <button type="button" className="secondary-button" onClick={onGenerate}>
               <FilePenLine size={15} /> 生成本章
             </button>
@@ -317,6 +344,18 @@ export function ManuscriptView({
           <EmptyState icon={FileText} title="本章尚未生成" description="生成后可在这里继续编辑，并围绕选中文本向 Agent 追问。" />
         )}
       </article>
+      <SectionGenerationPanel
+        open={generationPanelOpen}
+        section={section}
+        modelLabel={generationModelLabel}
+        preview={generationPreview}
+        previewLoading={generationPreviewLoading}
+        previewError={generationPreviewError}
+        submitting={generationSubmitting}
+        onClose={onCloseGenerationPanel}
+        onPreview={onPreviewGeneration}
+        onSubmit={onSubmitGeneration}
+      />
     </div>
   )
 }
